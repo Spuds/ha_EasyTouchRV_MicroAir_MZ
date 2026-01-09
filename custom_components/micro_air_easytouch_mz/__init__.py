@@ -6,8 +6,7 @@ from typing import Final
 
 from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
-    async_ble_device_from_address,
-)
+) 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant, callback
@@ -27,7 +26,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     email = entry.data.get(CONF_USERNAME)
     data = MicroAirEasyTouchBluetoothDeviceData(password=password, email=email)
 
+    # Store the device address for persistent connection attempts
+    data.set_device_address(address)
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {"data": data}
+
+    # Start polling by default so we can obtain full status for devices that do not advertise
+    try:
+        data.start_polling(hass, startup_delay=1.0, address=address)
+    except Exception as e:
+        _LOGGER.debug("Failed to start polling task: %s", str(e))
 
     @callback
     def _handle_bluetooth_update(service_info: BluetoothServiceInfoBleak) -> None:
@@ -47,7 +55,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
+        # Clean up device data
+        device_data = hass.data[DOMAIN].pop(entry.entry_id, {}).get("data")
+        if device_data:
+            await device_data.async_shutdown()
         # Unregister services
         await async_unregister_services(hass)
     return unload_ok

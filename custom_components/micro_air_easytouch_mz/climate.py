@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import logging
-import json
 import time
+import asyncio
 from typing import Any
+from datetime import timedelta
 
 from homeassistant.components.climate import (
     ClimateEntity,
@@ -12,15 +13,13 @@ from homeassistant.components.climate import (
     HVACMode,
     HVACAction,
 )
-from homeassistant.const import (
-    ATTR_TEMPERATURE,
-    UnitOfTemperature,
-)
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.components.bluetooth import async_ble_device_from_address
+from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
+from homeassistant.helpers.event import async_track_time_interval
 
 from .const import DOMAIN
 from .micro_air_easytouch.parser import MicroAirEasyTouchBluetoothDeviceData
@@ -28,12 +27,13 @@ from .micro_air_easytouch.const import (
     UUIDS,
     HA_MODE_TO_EASY_MODE,
     EASY_MODE_TO_HA_MODE,
-    FAN_MODES_FULL,
     FAN_MODES_FAN_ONLY,
     FAN_MODES_REVERSE,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+POLL_INTERVAL = timedelta(seconds=60)
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -52,6 +52,9 @@ async def async_setup_entry(
         entity = MicroAirEasyTouchClimate(data, mac_address, 0)
         async_add_entities([entity])
         return
+    
+    # Store the BLE device for persistent use
+    data.set_ble_device(ble_device)
     
     # Probe device for available zones
     try:
@@ -81,7 +84,10 @@ class MicroAirEasyTouchClimate(ClimateEntity):
     )
     _attr_temperature_unit = UnitOfTemperature.FAHRENHEIT
     _attr_hvac_modes = list(HA_MODE_TO_EASY_MODE.keys())
-    _attr_should_poll = True
+    _attr_should_poll = False
+    _attr_min_temp = 55
+    _attr_max_temp = 85
+    _attr_target_temperature_step = 1.0
 
     # Map our modes to Home Assistant fan icons
     _FAN_MODE_ICONS = {
@@ -138,6 +144,34 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             via_device=(DOMAIN, f"MicroAirEasyTouch_{mac_address}"),
         )
         self._state = {}
+        
+        # Subscribe to device updates instead of individual polling
+        self._unsubscribe_updates = self._data.async_subscribe_updates(self._handle_device_update)
+
+    def _handle_device_update(self, device_state: dict) -> None:
+        """Handle updates from the device data shared across all zones."""
+        try:
+            # Update zone-specific state from shared device state
+            if 'zones' in device_state and self._zone in device_state['zones']:
+                old_state = self._state.copy()
+                self._state = device_state['zones'][self._zone].copy()
+                
+                # Only trigger state write if something actually changed
+                if old_state != self._state:
+                    _LOGGER.debug("Zone %s state updated: %s", self._zone, 
+                                list(self._state.keys()) if self._state else "empty")
+                    self.async_write_ha_state()
+            elif self._zone == 0 and device_state:
+                # Fallback for single-zone compatibility
+                old_state = self._state.copy()
+                self._state = device_state.copy()
+                
+                if old_state != self._state:
+                    _LOGGER.debug("Zone %s state updated (fallback): %s", self._zone, 
+                                list(self._state.keys()) if self._state else "empty")
+                    self.async_write_ha_state()
+        except Exception as e:
+            _LOGGER.debug("Error updating zone %s state: %s", self._zone, str(e))
 
     @property
     def icon(self) -> str:
@@ -156,37 +190,24 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         """Return the icon to use for the current fan mode."""
         return self._FAN_MODE_ICONS.get(self.fan_mode, "mdi:fan")
 
-    async def _async_fetch_initial_state(self) -> None:
-        """Fetch the initial state from the device."""
-        ble_device = async_ble_device_from_address(self.hass, self._mac_address)
-        if not ble_device:
-            _LOGGER.error("Could not find BLE device: %s", self._mac_address)
-            self._state = {}
-            return
+    async def async_added_to_hass(self) -> None:
+        """Run when entity is added to hass."""
+        # Entity is now subscribed to updates via _handle_device_update
+        # Initial state will come from the polling loop
+        pass
 
-        message = {"Type": "Get Status", "Zone": self._zone, "EM": self._data._email, "TM": int(time.time())}
-        try:
-            if await self._data.send_command(self.hass, ble_device, message):
-                json_payload = await self._data._read_gatt_with_retry(self.hass, UUIDS["jsonReturn"], ble_device)
-                if json_payload:
-                    full_data = self._data.decrypt(json_payload.decode('utf-8'))
-                    # Get zone-specific data
-                    if 'zones' in full_data and self._zone in full_data['zones']:
-                        self._state = full_data['zones'][self._zone]
-                    else:
-                        # Fall back to root level data if zones not available (backward compatibility)
-                        self._state = full_data
-                    _LOGGER.debug("Initial state fetched for zone %s: %s", self._zone, self._state)
-                    self.async_write_ha_state()
-                else:
-                    self._state = {}
-                    _LOGGER.warning("No payload received for initial state zone %s", self._zone)
-            else:
-                self._state = {}
-                _LOGGER.warning("Failed to send command for initial state zone %s", self._zone)
-        except Exception as e:
-            _LOGGER.error("Failed to fetch initial state for zone %s: %s", self._zone, str(e))
-            self._state = {}
+    async def async_will_remove_from_hass(self) -> None:
+        """Run when entity is being removed from hass."""
+        if hasattr(self, '_unsubscribe_updates'):
+            self._unsubscribe_updates()
+
+    async def _async_fetch_initial_state(self) -> None:
+        """DEPRECATED: Fetch the initial state from the device.
+        
+        This method is no longer used. State updates come from the shared
+        polling loop to prevent connection conflicts.
+        """
+        _LOGGER.debug("_async_fetch_initial_state called for zone %s - using shared polling instead", self._zone)
 
     @property
     def current_temperature(self) -> float | None:
@@ -299,7 +320,28 @@ class MicroAirEasyTouchClimate(ClimateEntity):
 
         if changes:
             message = {"Type": "Change", "Changes": changes}
-            await self._data.send_command(self.hass, ble_device, message)
+            success = await self._data.send_command(self.hass, ble_device, message)
+
+            if success:
+                try:
+                    # Optimistically update set-points in local state
+                    if "cool_sp" in changes:
+                        self._state["cool_sp"] = changes["cool_sp"]
+                    if "heat_sp" in changes:
+                        self._state["heat_sp"] = changes["heat_sp"]
+                    if "dry_sp" in changes:
+                        self._state["dry_sp"] = changes["dry_sp"]
+                    if "autoCool_sp" in changes:
+                        self._state["autoCool_sp"] = changes["autoCool_sp"]
+                    if "autoHeat_sp" in changes:
+                        self._state["autoHeat_sp"] = changes["autoHeat_sp"]
+                    self.async_write_ha_state()
+                    _LOGGER.debug("Temperature set successfully for zone %s, immediate status update applied", self._zone)
+                except Exception as e:
+                    _LOGGER.debug("Failed to apply optimistic temperature update: %s", str(e))
+                # Note: Command execution automatically reads response for immediate verification
+            else:
+                _LOGGER.warning("Failed to set temperature for zone %s", self._zone)
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new target hvac mode."""
@@ -310,15 +352,33 @@ class MicroAirEasyTouchClimate(ClimateEntity):
 
         mode = HA_MODE_TO_EASY_MODE.get(hvac_mode)
         if mode is not None:
+            # Note: For zone-specific OFF we must send power=1 with mode=0; power=0 is a system-wide OFF (all zones).
             message = {
                 "Type": "Change",
                 "Changes": {
                     "zone": self._zone,
-                    "power": 0 if hvac_mode == HVACMode.OFF else 1,
+                    "power": 1,
                     "mode": mode,
                 },
             }
-            await self._data.send_command(self.hass, ble_device, message)
+            success = await self._data.send_command(self.hass, ble_device, message)
+
+            # Optimistically update local state for immediate UI feedback and schedule a verification fetch
+            if success:
+                try:
+                    # Set expected local state so UI updates immediately
+                    self._state["mode_num"] = mode
+                    if hvac_mode == HVACMode.OFF:
+                        self._state["off"] = True
+                    else:
+                        self._state["on"] = True
+                    self.async_write_ha_state()
+                    _LOGGER.debug("HVAC mode set successfully for zone %s, immediate status update applied", self._zone)
+                except Exception as e:
+                    _LOGGER.debug("Failed to apply optimistic hvac_mode update: %s", str(e))
+                # Note: Command execution automatically reads response for immediate verification
+            else:
+                _LOGGER.warning("Failed to set HVAC mode for zone %s", self._zone)
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         """Set new target fan mode using standard Home Assistant names."""
@@ -338,7 +398,19 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             else:
                 fan_value = 0
             message = {"Type": "Change", "Changes": {"zone": self._zone, "fanOnly": fan_value}}
-            await self._data.send_command(self.hass, ble_device, message)
+            success = await self._data.send_command(self.hass, ble_device, message)
+
+            if success:
+                try:
+                    # Optimistically set expected fan mode in local state
+                    self._state["fan_mode_num"] = fan_value
+                    self.async_write_ha_state()
+                    _LOGGER.debug("Fan-only mode set successfully for zone %s, immediate status update applied", self._zone)
+                except Exception as e:
+                    _LOGGER.debug("Failed to apply optimistic fan-only update: %s", str(e))
+                # Note: Command execution automatically reads response for immediate verification
+            else:
+                _LOGGER.warning("Failed to set fan-only mode for zone %s", self._zone)
         else:
             if fan_mode == "off":
                 fan_value = 0
@@ -354,13 +426,103 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             if self.hvac_mode == HVACMode.COOL:
                 changes["coolFan"] = fan_value
             elif self.hvac_mode == HVACMode.HEAT:
-                changes["heatFan"] = fan_value
+                # For heat mode, we need to use the correct fan field based on the specific heat mode
+                # Mode 3,4 = furnace modes, Mode 5 = heat pump, Mode 7 = heat strip
+                mode_num = self._state.get("mode_num", 5)
+                if mode_num in (3, 4):
+                    # Furnace modes use a different fan field
+                    changes["furnaceFan"] = fan_value
+                else:
+                    # Heat pump (5) and heat strip (7) use heatFan
+                    changes["heatFan"] = fan_value
             elif self.hvac_mode == HVACMode.AUTO:
                 changes["autoFan"] = fan_value
             message = {"Type": "Change", "Changes": changes}
-            await self._data.send_command(self.hass, ble_device, message)
+            success = await self._data.send_command(self.hass, ble_device, message)
+
+            if success:
+                try:
+                    # Optimistically set expected fan mode in correct slot
+                    if self.hvac_mode == HVACMode.COOL:
+                        self._state["cool_fan_mode_num"] = fan_value
+                    elif self.hvac_mode == HVACMode.HEAT:
+                        self._state["heat_fan_mode_num"] = fan_value
+                    elif self.hvac_mode == HVACMode.AUTO:
+                        self._state["auto_fan_mode_num"] = fan_value
+                    self.async_write_ha_state()
+                    _LOGGER.debug("Fan mode set successfully for zone %s, immediate status update applied", self._zone)
+                except Exception as e:
+                    _LOGGER.debug("Failed to apply optimistic fan update: %s", str(e))
+                # Note: Command execution automatically reads response for immediate verification
+            else:
+                _LOGGER.warning("Failed to set fan mode for zone %s", self._zone)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return additional state attributes."""
+        attrs: dict = {}
+        # Expose raw fields useful for debugging and automation
+        for k in (
+            "mode_num",
+            "current_mode_num",
+            "heat_source",
+            "on",
+            "off",
+            "facePlateTemperature",
+        ):
+            if k in self._state:
+                attrs[k] = self._state.get(k)
+        # Indicate whether device supports notifications
+        attrs["notifications_supported"] = getattr(self._data, "_notifications_supported", None)
+        return attrs
 
     async def async_update(self) -> None:
         """Update the entity state manually if needed."""
         _LOGGER.debug("Updating state for zone %s", self._zone)
         await self._async_fetch_initial_state()
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        # perform initial fetch
+        await self._async_fetch_initial_state()
+        # subscribe to parser updates (store unsubscribe)
+        self._unsub_updates = self._data.async_subscribe_updates(self._handle_update)
+
+    async def async_will_remove_from_hass(self) -> None:
+        await super().async_will_remove_from_hass()
+      
+        # Unsubscribe from updates
+        if self._unsub_updates:
+            self._unsub_updates()
+            self._unsub_updates = None
+
+    def _handle_update(self, full_state) -> None:
+        # Update self._state from parser (guard for missing data)
+        new_zone_state = full_state.get("zones", {}).get(self._zone) if full_state is not None else None
+        if new_zone_state is None:
+            _LOGGER.debug("No state for zone %s in update; full_state present: %s", self._zone, bool(full_state))
+            return
+            
+        prev_state = dict(self._state) if self._state else {}
+        prev_mode = prev_state.get("mode_num")
+        prev_hvac = EASY_MODE_TO_HA_MODE.get(prev_mode, HVACMode.OFF) if prev_mode is not None else None
+
+        self._state = new_zone_state
+
+        new_mode = self._state.get("mode_num")
+        new_hvac = EASY_MODE_TO_HA_MODE.get(new_mode, HVACMode.OFF)
+
+        if prev_mode != new_mode:
+            _LOGGER.debug(
+                "Zone %s updated: mode_num %s -> %s, hvac %s -> %s",
+                self._zone,
+                prev_mode,
+                new_mode,
+                prev_hvac,
+                new_hvac,
+            )
+
+        try:
+            self.async_write_ha_state()
+        except Exception as e:
+            _LOGGER.debug("Error writing HA state for zone %s: %s", self._zone, str(e))
