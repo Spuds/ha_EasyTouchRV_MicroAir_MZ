@@ -347,11 +347,12 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 zone_status['facePlateTemperature'] = info[12]  # Current actual temperature
                 zone_status['active_state_num'] = info[15]      # Active state (0=idle, 2=cooling, 4=heating, etc.)
 
-                # Check unit power state from PRM[1]: 3=off, 11=on
+                # Check unit power state from PRM[1] bit 3 (System Power flag)
                 if len(param) > 1:
-                    unit_state = param[1]
-                    zone_status['off'] = (unit_state == 3)
-                    zone_status['on'] = (unit_state == 11)
+                    flags_register = param[1]
+                    system_power_on = (flags_register & 8) > 0  # Bit 3
+                    zone_status['off'] = not system_power_on
+                    zone_status['on'] = system_power_on
 
                 # Map modes
                 if zone_status['mode_num'] in modes:

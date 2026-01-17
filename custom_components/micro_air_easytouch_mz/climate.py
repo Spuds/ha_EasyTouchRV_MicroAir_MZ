@@ -483,8 +483,8 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                     # Furnace modes use a different fan field
                     changes["furnaceFan"] = fan_value
                 else:
-                    # Heat pump (5) and heat strip (7) use heatFan
-                    changes["heatFan"] = fan_value
+                    # Heat pump (5) and heat strip (7) and electric heat (12) use eleFan (electric fan)
+                    changes["eleFan"] = fan_value
             elif self.hvac_mode == HVACMode.AUTO:
                 changes["autoFan"] = fan_value
             message = {"Type": "Change", "Changes": changes}

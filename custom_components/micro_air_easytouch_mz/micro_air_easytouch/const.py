@@ -6,7 +6,6 @@ UUIDS = {
     "passwordCmd": '0000DD01-0000-1000-8000-00805F9B34FB', #rw
     "jsonCmd":    '0000EE01-0000-1000-8000-00805F9B34FB', #rw
     "jsonReturn": '0000FF01-0000-1000-8000-00805F9B34FB',
-    "unknown":    '00002a05-0000-1000-8000-00805f9b34fb',
 }
 
 # Map EasyTouch modes to Home Assistant HVAC modes
@@ -14,7 +13,7 @@ HA_MODE_TO_EASY_MODE = {
     HVACMode.OFF: 0,
     HVACMode.HEAT: 5,
     HVACMode.COOL: 2,
-    HVACMode.AUTO: 8, # Try 8 generic heat/cool
+    HVACMode.AUTO: 8,
     HVACMode.FAN_ONLY: 1,
     HVACMode.DRY: 6,
 }

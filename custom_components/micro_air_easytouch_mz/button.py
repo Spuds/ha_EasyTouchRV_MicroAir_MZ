@@ -67,9 +67,9 @@ class MicroAirEasyTouchPowerToggleButton(ButtonEntity):
             manufacturer="Micro-Air",
             model="Thermostat",
         )
-        # Use static name for device page - dynamic state shown via icon and attributes
+        # Initialize with default values - will update when device data is available
         self._attr_name = "System Power Toggle"
-        self._update_attributes()
+        self._attr_icon = "mdi:power"
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to device data updates when entity is added to hass."""
@@ -90,37 +90,23 @@ class MicroAirEasyTouchPowerToggleButton(ButtonEntity):
         self.async_write_ha_state()
 
     def _update_attributes(self) -> None:
-        """Update the icon based on current device state. Name stays static."""
+        """Update the name and icon attributes based on current device state."""
         try:
             if self._is_unit_on():
+                self._attr_name = "All Zones Off"
                 self._attr_icon = "mdi:power-off"
             else:
+                self._attr_name = "All Zones On"
                 self._attr_icon = "mdi:power-on"
         except Exception as e:
             _LOGGER.debug("Error updating power toggle attributes: %s", str(e))
-            # Fallback to generic icon if device data isn't available
+            # Fallback to generic names if device data isn't available
+            self._attr_name = "System Power Toggle"
             self._attr_icon = "mdi:power"
 
     @property
-    def extra_state_attributes(self) -> dict:
-        """Return additional state attributes including current power state."""
-        attrs = {}
-        try:
-            is_on = self._is_unit_on()
-            attrs["current_action"] = "Turn Off" if is_on else "Turn On"
-            attrs["system_power"] = "On" if is_on else "Off"
-            device_data = self._data.async_get_device_data()
-            prm_data = device_data.get('PRM', [])
-            if len(prm_data) > 1:
-                attrs["prm_power_state"] = prm_data[1]
-        except Exception:
-            attrs["current_action"] = "Toggle"
-            attrs["system_power"] = "Unknown"
-        return attrs
-
-    @property
     def name(self) -> str:
-        """Return the static name for device page."""
+        """Return the current name attribute."""
         return self._attr_name
 
     @property
@@ -129,12 +115,12 @@ class MicroAirEasyTouchPowerToggleButton(ButtonEntity):
         return self._attr_icon
 
     def _is_unit_on(self) -> bool:
-        """Check if unit is currently on based on PRM[1] value."""
+        """Check if unit is currently on based on PRM[1] bit 3 (System Power flag)."""
         device_data = self._data.async_get_device_data()
         prm_data = device_data.get('PRM', [])
         if len(prm_data) > 1:
-            unit_state = prm_data[1]
-            return unit_state == 11  # 11=on, 3=off
+            flags_register = prm_data[1]
+            return (flags_register & 8) > 0  # Bit 3 = System Power
         return False  # Default to off if no data available
 
     def _get_zone_count(self) -> int:
@@ -150,9 +136,9 @@ class MicroAirEasyTouchPowerToggleButton(ButtonEntity):
         without affecting individual zone states. This allows zones to retain
         their last state when the system comes back online.
         
-        Checks current state from PRM[1] and toggles:
-        - If currently on (PRM[1]=11), send mode=0, power=0, zone=zone_count (turn off)
-        - If currently off (PRM[1]=3), send mode=0, power=1, zone=zone_count (turn on)
+        Checks current state from PRM[1] bit 3 (System Power flag) and toggles:
+        - If currently on (bit 3 set), send mode=0, power=0, zone=zone_count (turn off)
+        - If currently off (bit 3 clear), send mode=0, power=1, zone=zone_count (turn on)
         """
         is_on = self._is_unit_on()
         new_power_state = 0 if is_on else 1
@@ -173,7 +159,7 @@ class MicroAirEasyTouchPowerToggleButton(ButtonEntity):
         if success:
             _LOGGER.info("Sent system-wide %s (mode=0, zone=%d, power=%d) to device %s", 
                         action, zone_count, new_power_state, self._mac_address)
-            # Update icon immediately and trigger a state update
+            # Update attributes immediately and trigger a state update
             self._update_attributes()
             self.async_write_ha_state()
         else:
