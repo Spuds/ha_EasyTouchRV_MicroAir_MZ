@@ -132,6 +132,10 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
 
         # Latest parsed device state (populated by `decrypt`)
         self._device_state: dict = {}
+        
+        # Zone configuration data (MAV bitmasks, FA arrays, SPL limits)
+        # Structure: {'zone_configs': {0: {'MAV': 1023, 'FA': [...], 'SPL': [...]}, 1: {...}}}
+        self._zone_configs: dict = {}
 
         # Subscribers to device update events. Each subscriber is a callable
         # that takes no arguments and is invoked when device state changes.
@@ -419,8 +423,12 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         # Apply parsed state as authoritative and notify subscribers
         try:
             _LOGGER.debug("Applying parsed device state (zones=%d)", len(hr_status.get('zones', {})))
-            # Overwrite the stored parsed state — polls are authoritative
+            # Preserve zone configuration data when updating state from polls
+            preserved_zone_configs = self._device_state.get('zone_configs', {})
             self._device_state = hr_status
+            if preserved_zone_configs:
+                self._device_state['zone_configs'] = preserved_zone_configs
+                _LOGGER.debug("Preserved zone configurations for %d zones", len(preserved_zone_configs))
             self._notify_update()
         except Exception as e:
             _LOGGER.debug("Failed to notify subscribers of decrypted state: %s", str(e))
@@ -650,6 +658,10 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                             zones = decrypted.get('available_zones', [0])
                             _LOGGER.debug("Zone probe found zones (attempt %d, cmd %d): %s", attempt + 1, cmd_index + 1, zones)
                             
+                            # Fetch configuration data for detected zones
+                            if zones and len(zones) > 0:
+                                await self._fetch_zone_configurations(client, zones)
+                            
                             # If we found multiple zones, we're done
                             if len(zones) > 1:
                                 _LOGGER.info("Zone probe successful: detected %d zones: %s (attempt %d)", len(zones), zones, attempt + 1)
@@ -683,6 +695,93 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         # All attempts failed, fallback to single zone
         _LOGGER.warning("All zone detection attempts failed for %s, defaulting to single zone", ble_device.address)
         return [0]
+    
+    async def _fetch_zone_configurations(self, client, zones: list[int]) -> None:
+        """Fetch configuration data (MAV, FA, SPL) for detected zones.
+        
+        This retrieves the device capabilities that determine which modes and fan speeds
+        are available for each zone, enabling proper UI filtering.
+        """
+        _LOGGER.debug("Fetching configuration data for zones: %s", zones)
+        
+        for zone in zones:
+            try:
+                # Send Get Config request for this zone
+                config_cmd = {"Type": "Get Config", "Zone": zone}
+                _LOGGER.debug("Requesting config for zone %d: %s", zone, config_cmd)
+                
+                await client.write_gatt_char(UUIDS["jsonCmd"], json.dumps(config_cmd).encode('utf-8'), response=True)
+                await asyncio.sleep(0.5)  # Allow device time to prepare response
+                
+                payload = await client.read_gatt_char(UUIDS["jsonReturn"])
+                if payload:
+                    try:
+                        response = json.loads(payload.decode('utf-8'))
+                        if response.get('Type') == 'Response' and response.get('RT') == 'Config':
+                            cfg_str = response.get('CFG', '{}')
+                            cfg_data = json.loads(cfg_str) if isinstance(cfg_str, str) else cfg_str
+                            
+                            # Store configuration data for this zone
+                            if 'zone_configs' not in self._device_state:
+                                self._device_state['zone_configs'] = {}
+                            
+                            self._device_state['zone_configs'][zone] = {
+                                'MAV': cfg_data.get('MAV', 0),      # Mode available bitmask
+                                'FA': cfg_data.get('FA', [0]*16),   # Fan array (16 elements)
+                                'SPL': cfg_data.get('SPL', [60, 85, 60, 85]),  # Setpoint limits
+                                'MA': cfg_data.get('MA', [0]*16)    # Mode array (currently unused)
+                            }
+                            
+                            _LOGGER.debug("Zone %d config: MAV=%d, FA=%s, SPL=%s", 
+                                        zone, cfg_data.get('MAV', 0), cfg_data.get('FA', [])[:4], cfg_data.get('SPL', []))
+                        else:
+                            _LOGGER.debug("Unexpected config response for zone %d: %s", zone, response)
+                    except (json.JSONDecodeError, KeyError) as e:
+                        _LOGGER.debug("Failed to parse config response for zone %d: %s", zone, str(e))
+                else:
+                    _LOGGER.debug("No config response received for zone %d", zone)
+                    
+            except Exception as e:
+                _LOGGER.debug("Error fetching config for zone %d: %s", zone, str(e))
+                continue
+        
+        _LOGGER.debug("Configuration fetch complete. Stored configs for zones: %s", 
+                     list(self._device_state.get('zone_configs', {}).keys()))
+    
+    async def _refetch_zone_configurations(self, hass, ble_device: BLEDevice, zones: list[int]) -> None:
+        """Re-fetch zone configurations during setup to ensure runtime parser has config data.
+        
+        This solves the issue where config flow fetches zone configs in a temporary parser,
+        but the runtime parser instance needs the same configuration data.
+        """
+        _LOGGER.info("Re-fetching zone configurations for runtime parser: zones %s", zones)
+        
+        client = None
+        try:
+            # Connect and authenticate
+            client = await establish_connection(BleakClientWithServiceCache, ble_device, ble_device.address, timeout=15.0)
+            if not client or not client.is_connected:
+                _LOGGER.warning("Could not connect to re-fetch zone configs")
+                return
+
+            if self._password:
+                password_bytes = self._password.encode('utf-8')
+                await client.write_gatt_char(UUIDS["passwordCmd"], password_bytes, response=True)
+                await asyncio.sleep(0.5)
+                _LOGGER.debug("Re-fetch authentication completed")
+
+            # Fetch config for each detected zone
+            await self._fetch_zone_configurations(client, zones)
+            _LOGGER.info("Runtime zone configuration re-fetch completed successfully")
+            
+        except Exception as e:
+            _LOGGER.warning("Error re-fetching zone configurations: %s", str(e))
+        finally:
+            try:
+                if client and client.is_connected:
+                    await client.disconnect()
+            except Exception:
+                pass
 
     async def _process_command_queue(self, hass, ble_device: BLEDevice) -> None:
         """Process commands from the queue serially to prevent device conflicts.
@@ -1124,3 +1223,70 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         except Exception as e:
             _LOGGER.error("Command execution failed: %s", str(e))
             return False
+
+    def get_zone_config(self, zone: int) -> dict:
+        """Get configuration data for a specific zone."""
+        return self._device_state.get('zone_configs', {}).get(zone, {})
+    
+    def is_mode_available(self, zone: int, mode: int) -> bool:
+        """Check if a specific mode is available for a zone based on MAV bitmask."""
+        config = self.get_zone_config(zone)
+        mav = config.get('MAV', 0)
+        return (mav & (1 << mode)) > 0
+    
+    def get_available_modes(self, zone: int) -> list[int]:
+        """Get list of available modes for a zone."""
+        config = self.get_zone_config(zone)
+        mav = config.get('MAV', 0)
+        available_modes = []
+        for mode in range(16):
+            if (mav & (1 << mode)) > 0:
+                available_modes.append(mode)
+        _LOGGER.debug("Zone %d MAV=%d, available modes: %s", zone, mav, available_modes)
+        return available_modes
+    
+    def get_fan_capabilities(self, zone: int, mode: int) -> dict:
+        """Get fan speed capabilities for a zone/mode based on FA array.
+        
+        Returns dict with: max_speed, fixed_speed, allow_off, allow_manual_auto, allow_full_auto
+        """
+        config = self.get_zone_config(zone)
+        fa_array = config.get('FA', [0]*16)
+        if mode >= len(fa_array):
+            return {'max_speed': 0, 'fixed_speed': True, 'allow_off': False, 'allow_manual_auto': False, 'allow_full_auto': False}
+        
+        fa_value = fa_array[mode]
+        return {
+            'max_speed': fa_value & 15,                # Lower 4 bits
+            'fixed_speed': (fa_value & 16) > 0,        # Bit 4
+            'allow_off': (fa_value & 32) > 0,          # Bit 5
+            'allow_manual_auto': (fa_value & 64) > 0,  # Bit 6
+            'allow_full_auto': (fa_value & 128) > 0    # Bit 7
+        }
+    
+    def get_available_fan_speeds(self, zone: int, mode: int) -> list[int]:
+        """Get list of available fan speeds for a zone/mode."""
+        capabilities = self.get_fan_capabilities(zone, mode)
+        
+        if capabilities['fixed_speed']:
+            # Fixed speed mode - return only the max speed
+            return [capabilities['max_speed']] if capabilities['max_speed'] > 0 else [0]
+        
+        speeds = []
+        
+        # Add off speed if allowed
+        if capabilities['allow_off']:
+            speeds.append(0)
+        
+        # Add manual speeds 1 through max_speed
+        for speed in range(1, capabilities['max_speed'] + 1):
+            speeds.append(speed)
+        
+        # Add auto modes if allowed
+        if capabilities['allow_manual_auto']:
+            speeds.append(64)  # Manual auto
+        
+        if capabilities['allow_full_auto']:
+            speeds.append(128)  # Full auto
+        
+        return speeds

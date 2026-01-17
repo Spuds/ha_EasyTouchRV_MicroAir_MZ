@@ -29,6 +29,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store the device address for persistent connection attempts
     data.set_device_address(address)
 
+    # Re-fetch zone configurations if zones were detected during setup
+    detected_zones = entry.data.get('detected_zones', [])
+    _LOGGER.debug("Setup entry data: %s", entry.data)
+    _LOGGER.debug("Detected zones from config entry: %s", detected_zones)
+    
+    if detected_zones:
+        _LOGGER.debug("Setup will re-fetch configuration for detected zones: %s", detected_zones)
+        try:
+            from homeassistant.components.bluetooth import async_ble_device_from_address
+            ble_device = async_ble_device_from_address(hass, address)
+            if ble_device:
+                # Re-fetch the zone configurations that were obtained during config flow
+                # This ensures the runtime parser has the same MAV/FA/SPL data
+                await data._refetch_zone_configurations(hass, ble_device, detected_zones)
+            else:
+                _LOGGER.warning("Cannot re-fetch zone configs - BLE device not available")
+        except Exception as e:
+            _LOGGER.warning("Failed to re-fetch zone configurations: %s", str(e))
+    else:
+        _LOGGER.warning("No detected zones found in config entry, skipping zone config re-fetch")
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {"data": data}
 
     # Start polling by default so we can obtain full status for devices that do not advertise

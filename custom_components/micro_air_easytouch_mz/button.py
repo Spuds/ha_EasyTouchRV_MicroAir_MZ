@@ -153,8 +153,9 @@ class MicroAirEasyTouchPowerToggleButton(ButtonEntity):
             _LOGGER.error("Could not find BLE device to send power toggle: %s", self._mac_address)
             return
         
-        # Send to non-existent zone (zone_count) to avoid affecting individual zone states
-        cmd = {"Type": "Change", "Changes": {"mode": 0, "zone": zone_count, "power": new_power_state}}
+        # Send power command to zone 0 to turn on/off system power
+        cmd = {"Type": "Change", "Changes": {"zone": 0, "power": new_power_state}}
+
         success = await self._data.send_command(self.hass, ble_device, cmd)
         if success:
             _LOGGER.info("Sent system-wide %s (mode=0, zone=%d, power=%d) to device %s", 
