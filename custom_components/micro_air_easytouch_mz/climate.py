@@ -28,6 +28,7 @@ from .micro_air_easytouch.const import (
     HA_MODE_TO_EASY_MODE,
     EASY_MODE_TO_HA_MODE,
     FAN_MODES_FAN_ONLY,
+    FAN_MODES_FAN_ONLY_REVERSE,
     FAN_MODES_REVERSE,
 )
 
@@ -288,10 +289,18 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         """Return the current fan mode as a standard Home Assistant name."""
         if self.hvac_mode == HVACMode.FAN_ONLY:
             fan_mode_num = self._state.get("fan_mode_num", 0)
-            mode = FAN_MODES_FAN_ONLY.get(fan_mode_num, "off")
+            mode = FAN_MODES_FAN_ONLY_REVERSE.get(fan_mode_num, "off")
+            result = self._FAN_MODE_MAP.get(mode, "auto")
+            _LOGGER.debug("Zone %d fan_mode: hvac=%s, fan_mode_num=%s, device_mode='%s', final='%s'", 
+                         self._zone, self.hvac_mode, fan_mode_num, mode, result)
+            return result
         elif self.hvac_mode == HVACMode.COOL:
             fan_mode_num = self._state.get("cool_fan_mode_num", 128)
             mode = FAN_MODES_REVERSE.get(fan_mode_num, "full auto")
+            result = self._FAN_MODE_MAP.get(mode, "auto")
+            _LOGGER.debug("Zone %d cool fan_mode: fan_mode_num=%s, device_mode='%s', final='%s'", 
+                         self._zone, fan_mode_num, mode, result)
+            return result
         elif self.hvac_mode == HVACMode.HEAT:
             fan_mode_num = self._state.get("heat_fan_mode_num", 128)
             mode = FAN_MODES_REVERSE.get(fan_mode_num, "full auto")
@@ -306,11 +315,9 @@ class MicroAirEasyTouchClimate(ClimateEntity):
     def hvac_modes(self) -> list[HVACMode]:
         """Return available HVAC modes based on zone configuration."""
         available_modes = self._data.get_available_modes(self._zone)
-        _LOGGER.debug("Zone %d available modes from MAV bitmask: %s", self._zone, available_modes)
         
         if not available_modes:
             # Fallback to default modes if no config available
-            _LOGGER.debug("Zone %d no config available, using fallback modes", self._zone)
             return list(HA_MODE_TO_EASY_MODE.keys())
         
         # Filter HA modes based on device's available modes
@@ -318,7 +325,6 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         for ha_mode, device_mode in HA_MODE_TO_EASY_MODE.items():
             if device_mode in available_modes:
                 supported_hvac_modes.append(ha_mode)
-                _LOGGER.debug("Zone %d: Added %s (device mode %d)", self._zone, ha_mode, device_mode)
         
         # Also check reverse mappings for additional device modes
         for device_mode in available_modes:
@@ -326,9 +332,8 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                 ha_mode = EASY_MODE_TO_HA_MODE[device_mode]
                 if ha_mode not in supported_hvac_modes:
                     supported_hvac_modes.append(ha_mode)
-                    _LOGGER.debug("Zone %d: Added %s (device mode %d) from reverse mapping", self._zone, ha_mode, device_mode)
         
-        _LOGGER.debug("Zone %d final HVAC modes: %s", self._zone, supported_hvac_modes)
+        _LOGGER.debug("Zone %d HVAC modes filtered by MAV: %s", self._zone, [mode.value for mode in supported_hvac_modes])
         return supported_hvac_modes if supported_hvac_modes else list(HA_MODE_TO_EASY_MODE.keys())
 
     @property
@@ -508,6 +513,8 @@ class MicroAirEasyTouchClimate(ClimateEntity):
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         """Set new target fan mode using standard Home Assistant names."""
+        _LOGGER.debug("Fan mode change requested for zone %d: %s -> %s", self._zone, self.fan_mode, fan_mode)
+        
         # Validate fan mode is available for current HVAC mode
         if fan_mode not in self.fan_modes:
             _LOGGER.warning("Fan mode %s not available for zone %s in mode %s (available: %s)", 
@@ -522,14 +529,26 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         # Map standard name to device value and validate
         current_mode_num = self._state.get("mode_num", 1)  # Default to fan-only if unknown
         available_speeds = self._data.get_available_fan_speeds(self._zone, current_mode_num)
+        _LOGGER.debug("Zone %d current mode %d, available speeds: %s", self._zone, current_mode_num, available_speeds)
         
         # Map fan mode name to speed value
         if fan_mode == "off":
             fan_value = 0
-        elif fan_mode == "low":
-            fan_value = 1
-        elif fan_mode == "high":
-            fan_value = 2
+        elif fan_mode in ["low", "high"]:
+            # For low/high, we need to check if we're in cool mode and preserve manual vs cycled setting
+            if self.hvac_mode == HVACMode.COOL:
+                current_fan_num = self._state.get("cool_fan_mode_num", 1)
+                if fan_mode == "low":
+                    # If current is cycled low (65), keep cycled; otherwise use manual low (1)
+                    fan_value = 65 if current_fan_num == 65 else 1
+                else:  # fan_mode == "high"
+                    # If current is cycled high (66), keep cycled; otherwise use manual high (2) 
+                    fan_value = 66 if current_fan_num == 66 else 2
+                _LOGGER.debug("Zone %d cool mode: current_fan_num=%d, fan_mode='%s', using fan_value=%d", 
+                             self._zone, current_fan_num, fan_mode, fan_value)
+            else:
+                # For non-cool modes, use standard mapping
+                fan_value = 1 if fan_mode == "low" else 2
         elif fan_mode == "medium":
             fan_value = 3
         elif fan_mode == "auto":
@@ -544,19 +563,25 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             _LOGGER.warning("Unknown fan mode: %s", fan_mode)
             return
         
+        _LOGGER.debug("Zone %d mapped fan mode '%s' to value %d", self._zone, fan_mode, fan_value)
+        
         # Validate the fan speed is actually available for this mode
         if available_speeds and fan_value not in available_speeds:
             _LOGGER.warning("Fan speed %d not available for zone %s mode %d (available: %s)", 
                           fan_value, self._zone, current_mode_num, available_speeds)
             return
         if self.hvac_mode == HVACMode.FAN_ONLY:
+            _LOGGER.debug("Zone %d current fan_mode_num before command: %s", self._zone, self._state.get("fan_mode_num"))
             message = {"Type": "Change", "Changes": {"zone": self._zone, "fanOnly": fan_value}}
+            _LOGGER.debug("Sending fan-only command for zone %d: %s", self._zone, message)
             success = await self._data.send_command(self.hass, ble_device, message)
 
             if success:
                 try:
                     # Optimistically set expected fan mode in local state
+                    old_value = self._state.get("fan_mode_num")
                     self._state["fan_mode_num"] = fan_value
+                    _LOGGER.debug("Zone %d optimistic update: fan_mode_num %s -> %d", self._zone, old_value, fan_value)
                     self.async_write_ha_state()
                     _LOGGER.debug("Fan-only mode set successfully for zone %s, immediate status update applied", self._zone)
                 except Exception as e:
@@ -569,19 +594,21 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             changes = {"zone": self._zone}
             if self.hvac_mode == HVACMode.COOL:
                 changes["coolFan"] = fan_value
+                _LOGGER.debug("Sending cool fan command for zone %d: coolFan=%d", self._zone, fan_value)
             elif self.hvac_mode == HVACMode.HEAT:
                 # For heat mode, we need to use the correct fan field based on the specific heat mode
-                # Mode 3,4 = furnace modes, Mode 5 = heat pump, Mode 7 = heat strip
+                # Mode 3,4 = furnace modes
                 mode_num = self._state.get("mode_num", 5)
                 if mode_num in (3, 4):
                     # Furnace modes use a different fan field
                     changes["furnaceFan"] = fan_value
                 else:
-                    # Heat pump (5) and heat strip (7) and electric heat (12) use eleFan (electric fan)
+                    # Heat pump (5) heat strip (7) and electric heat (12) use eleFan (electric fan)
                     changes["eleFan"] = fan_value
             elif self.hvac_mode == HVACMode.AUTO:
                 changes["autoFan"] = fan_value
             message = {"Type": "Change", "Changes": changes}
+            _LOGGER.debug("Sending non-fan-only command for zone %d: %s", self._zone, message)
             success = await self._data.send_command(self.hass, ble_device, message)
 
             if success:

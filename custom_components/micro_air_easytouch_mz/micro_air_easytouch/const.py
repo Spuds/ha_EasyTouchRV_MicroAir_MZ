@@ -22,14 +22,14 @@ HA_MODE_TO_EASY_MODE = {
 EASY_MODE_TO_HA_MODE = {v: k for k, v in HA_MODE_TO_EASY_MODE.items()}
 
 # Device may report mode additional heat modes and auto modes
-EASY_MODE_TO_HA_MODE[3] = HVACMode.HEAT # furnace
-EASY_MODE_TO_HA_MODE[4] = HVACMode.HEAT # furnace
-EASY_MODE_TO_HA_MODE[7] = HVACMode.HEAT # heat strip 
-EASY_MODE_TO_HA_MODE[12] = HVACMode.HEAT # electric heat 
+EASY_MODE_TO_HA_MODE[3] = HVACMode.HEAT # Generic heating furnace
+EASY_MODE_TO_HA_MODE[4] = HVACMode.HEAT # Gas/Diesel furnace heating
+EASY_MODE_TO_HA_MODE[7] = HVACMode.HEAT # Electric heating strip 
+EASY_MODE_TO_HA_MODE[12] = HVACMode.HEAT # Direct electric heating
 
-EASY_MODE_TO_HA_MODE[9] = HVACMode.AUTO # auto (AC/Strip)
-EASY_MODE_TO_HA_MODE[10] = HVACMode.AUTO # auto (AC/HeatPump)
-EASY_MODE_TO_HA_MODE[11] = HVACMode.AUTO # auto (AC/Furnace)
+EASY_MODE_TO_HA_MODE[9] = HVACMode.AUTO # Auto with heat strip backup
+EASY_MODE_TO_HA_MODE[10] = HVACMode.AUTO # Auto with heat pump backup
+EASY_MODE_TO_HA_MODE[11] = HVACMode.AUTO # Auto with furnace backup
 
 # Fan mode mappings (general and mode-specific)
 FAN_MODES_FULL = {
@@ -48,3 +48,4 @@ FAN_MODES_FAN_ONLY = {
 }
 
 FAN_MODES_REVERSE = {v: k for k, v in FAN_MODES_FULL.items()}
+FAN_MODES_FAN_ONLY_REVERSE = {v: k for k, v in FAN_MODES_FAN_ONLY.items()}

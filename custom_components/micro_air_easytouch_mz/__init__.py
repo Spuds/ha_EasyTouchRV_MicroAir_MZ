@@ -31,11 +31,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Re-fetch zone configurations if zones were detected during setup
     detected_zones = entry.data.get('detected_zones', [])
-    _LOGGER.debug("Setup entry data: %s", entry.data)
-    _LOGGER.debug("Detected zones from config entry: %s", detected_zones)
     
     if detected_zones:
-        _LOGGER.debug("Setup will re-fetch configuration for detected zones: %s", detected_zones)
+        _LOGGER.debug("Re-fetching zone configurations for %d zones", len(detected_zones))
         try:
             from homeassistant.components.bluetooth import async_ble_device_from_address
             ble_device = async_ble_device_from_address(hass, address)

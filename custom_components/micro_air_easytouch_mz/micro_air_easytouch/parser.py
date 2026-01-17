@@ -1242,7 +1242,6 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         for mode in range(16):
             if (mav & (1 << mode)) > 0:
                 available_modes.append(mode)
-        _LOGGER.debug("Zone %d MAV=%d, available modes: %s", zone, mav, available_modes)
         return available_modes
     
     def get_fan_capabilities(self, zone: int, mode: int) -> dict:
