@@ -1,96 +1,146 @@
-
-[![License](https://img.shields.io/github/license/Spuds/ha_EasyTouchRV_MicroAir_MZ.svg?style=flat-square)](LICENSE)
 [![hacs](https://img.shields.io/badge/HACS-default-orange.svg?style=flat-square)](https://hacs.xyz)
-[![GitHub Release](https://img.shields.io/github/release/Spuds/ha_EasyTouchRV_MicroAir_MZ.svg?style=flat-square)](https://github.com/Spuds/ha_EasyTouchRV_MicroAir_MZ/releases)
-# ha-micro-air-easytouch
-Home Assistant Integration for the Mutli-Zone Micro-Air EasyTouch RV Thermostat
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.12+-blue.png)
+![Status](https://img.shields.io/badge/Status-Unofficial-lightgrey.png)
+![Device](https://img.shields.io/badge/Device-Micro--Air%20EasyTouch%20357-blueviolet.png)
+![Warning](https://img.shields.io/badge/Warning-Experimental-green.png)
 
-This integration implements a Home Assistant climate entity for control of your Micro-Air EasyTouch RV thermostat. 
+# Micro-Air EasyTouch Multi-Zone (MZ)
+Home Assistant Integration for Multi-Zone Micro-Air EasyTouch RV Thermostats
 
-It is a fork of the original [micro-air-easytouch](https://github.com/k3vmcd/micro-air-easytouch) integration by [k3vmcd](https://github.com/k3vmcd). This fork is an **experimental** update to the multi-zone branch (which is also experimental) and will only be tested against the 357 model thermostat.  
+This integration provides Home Assistant control for Micro-Air EasyTouch RV thermostats with enhanced Bluetooth stability, automatic capability discovery, and multi-zone support.  As I only have a model 357 (Dometic CCC1) that is all I've been able to test.  Please see the WIKI for what protocol information has been reverse engineered.
 
-**Do not use** This its only a test to determine what may work for my RV. In addition to zones, mine also has dual heat sources with both heat-pumps and an aqua-hot/furnace.
+Originally forked from [micro-air-easytouch](https://github.com/k3vmcd/micro-air-easytouch) by [k3vmcd](https://github.com/k3vmcd), this version has been extensively hacked on in an effort to provide BLE stability fixes, advanced protocol support, and add new features.
 
-Core Features:
-- Bluetooth connectivity
-- Zone support
-- Temperature monitoring via faceplate sensor
-- Basic HVAC modes (Heat, Cool, Auto, Dry, Off)
-- Fan mode settings
-- Temperature setpoint controls
-- Uses a Climate entity and is represented as an HVAC device in Home Assistant
-- Service to configure device location
+## Key Features
 
-Additional Features:
-- Device reboot functionality
-- Device Off (separate from zone off)
-- Service to configure device location for the device to display the local weather
+### 🏠 **Multi-Zone Support**
+- Automatic zone detection during setup
+- Individual climate entities per zone
+- Zone-specific capability filtering
+- Centralized "All Off" button for system shutdown
 
-Known Limitations:
-- The device responds slowly to commands - please wait a few seconds between actions
-- When the unit is powered off from the device itself, this state is not reflected in Home Assistant
-- Not all fan modes are settable in Home Assistant, "Cycled High" and "Cycled Low" are not available in Home Assistant - this is most likely due to limitations in the Home Assistant Climate entity
-- Whenever the mobile app connects to the device via bluetooth, Home Assistant will be disconnected and does not receive data until the app is disconnected.
+### 🔗 **Enhanced Bluetooth Stability**
+- Persistent connection management with 2-minute idle timeout
+- Command serialization to prevent device lockups
+- Connection pooling across all zones
+- Automatic reconnection with exponential backoff
 
-The integration works through Home Assistant's climate interface. You can control your thermostat through the Home Assistant UI or include it in automatons, keeping in mind the device's response limitations.
+### ⚡ **Smart Capability Discovery**
+- Automatic detection of available HVAC modes per zone
+- Dynamic fan speed filtering based on device configuration
+- Temperature limit enforcement (SPL arrays)
+- UI elements automatically filtered based on device capabilities
 
-## Current Decoded Zine Structure
+### 🚀 **Optimistic UI Updates**
+- Immediate UI feedback on command execution
+- Background verification with device state polling
+- Seamless user experience with responsive controls
 
+### 🎛️ **Advanced HVAC Control**
+- Full protocol support for all device modes (Off, Fan, Cool, Heat variants, Auto variants, Dry)
+- Intelligent heat source detection (Heat Pump vs Furnace/AquaHot)
+- Proper fan control for all operating modes
+- Multiple auto mode support with heat source selection
+
+## Installation
+
+### Via HACS (Recommended)
+1. Add this repository to HACS as a custom repository
+2. Search for "Micro-Air EasyTouch MZ" 
+3. Install the integration
+4. Restart Home Assistant
+
+### Manual Installation
+1. Copy the `micro_air_easytouch_mz` folder to your `custom_components` directory
+2. Restart Home Assistant
+3. Configure through the integrations page
+
+## Configuration
+
+1. **Enable Bluetooth**: Ensure your Home Assistant instance can support GATT Bluetooth connections and that the thermostat is connected via GATT.
+2. **Add Integration**: Go to Settings → Devices & Services → Add Integration
+3. **Device Selection**: Select your EasyTouch device from discovered devices
+4. **Authentication**: Enter your EasyTouch account email and password
+5. **Automatic Setup**: The integration will automatically detect zones and fetch device capabilities
+
+## Supported Features
+
+### HVAC Modes
+- **Off**: Complete system shutdown
+- **Fan Only**: Circulation without heating/cooling
+- **Cool**: Air conditioning mode
+- **Heat**: Heating (automatically detects Heat Pump vs Furnace/AquaHot)
+- **Auto**: Automatic heating/cooling (if supported by device)
+- **Dry**: Dehumidification mode (if supported by device)
+
+### Fan Modes
+- **Auto**: Automatic fan speed control
+- **Low/High**: Manual fan speed settings
+- **Cycled Low/High**: Energy-saving cycled operation (device-dependent)
+
+### Services
+- **Location Service**: Configure device GPS coordinates for weather display
+- **Test Set Mode**: Debug service for testing specific mode/zone combinations
+
+## Device Capability System
+
+The integration automatically discovers and respects your device's specific capabilities:
+
+- **MAV Bitmask**: Determines which HVAC modes are available for each zone
+- **FA Arrays**: Control available fan speeds for different operating modes  
+- **SPL Arrays**: Enforce temperature setpoint limits (min/max cool/heat)
+
+This means the Home Assistant UI will only show controls that your specific device supports, preventing invalid commands.
+
+## Known Limitations
+
+### Device Limitations
+- Commands take 1-2 seconds to validate (device protocol limitation)
+- Device responds to only one Bluetooth connection at a time
+- Mobile app usage will disconnect Home Assistant temporarily
+- Some older firmware may not support all auto modes
+
+### Home Assistant Integration Limitations
+- Temperature display resolution limited to whole degrees
+- Some advanced fan modes may not have Home Assistant equivalents
+- Zone detection requires device to be powered on during setup
+
+## Architecture & Reliability
+
+### Bluetooth Stability Design
+- **Single Persistent Connection**: Shared across all zones to prevent conflicts
+- **Command Queue**: FIFO execution with proper serialization
+- **Health Monitoring**: Automatic connection health checks every 60 seconds  
+- **Error Recovery**: Comprehensive retry logic with adaptive delays
+
+### Performance Optimizations
+- **Background Polling**: Regular device status updates every 30 seconds
+- **Configuration Caching**: Device capabilities cached to prevent repeated queries
+- **Optimistic Updates**: UI updates immediately while verifying in background
+
+## Troubleshooting
+
+### Debug Logging
+Enable debug logging to troubleshoot issues:
+```yaml
+logger:
+  logs:
+    custom_components.micro_air_easytouch_mz: debug
 ```
-Zone Status Array (16 values):
-────────────────────────────────────────────────────────────────────────────────────
-Index  Value   Meaning
-────────────────────────────────────────────────────────────────────────────────────
-  0      67    Auto mode heat setpoint (°F)
-  1      76    Auto mode cool setpoint (°F)
-  2      76    Cool mode setpoint (°F)
-  3      73    Heat mode setpoint (°F)
-  4      72    Dry/Dehumidify temperature setpoint (°F)
-  5      45    **Unknown** (always 45 in my samples / ? %RH humidity value)
-  6       2    Fan-Only mode speed (0=off, 1=low, 2=high) - when mode 10=1
-  7     128    Cool mode fan (0/1/2/65/66/128) - when mode 10=2
-  8     128    Heat mode fan (0/1/2/128) - when mode 10=5,7
-  9     128    Auto mode fan (0/1/2/3/128) - when mode auto 10=(8,10,11)
- 10       5    User Selected Mode (what you chose)
- 11       1    Furnace mode fan (0/1/2/128) when mode 10=(3,4)
- 12      64    Current actual temperature (°F)
- 13     255    **Unknown** (always 255 null/unset in my samples))
- 14       0    **Unknown** (always 0 in my samples / ? Error code (0=no error))
- 15       4    Active State (0=idle, 2=cooling, 4=heating, ...)
-────────────────────────────────────────────────────────────────────────────────────
-```
 
-## Available Modes (Actual support depends on the installed system)
+### Common Issues
+- **Connection Timeout**: Ensure device is powered and in range
+- **Authentication Failed**: Verify email/password credentials
+- **Missing Modes**: Check device MAV configuration - some modes may be disabled
+- **Slow Response**: Normal behavior - device protocol requires 1-2 second delays to validate the sent command was successful.  The command is sent right away, but the system must wait to see if it was "accepted"
 
-```
-Manually setting modes resulted in the following mode Icons
-────────────────────────────────────────────────────────────────────────────────────
-Index  Meaning
-────────────────────────────────────────────────────────────────────────────────────
- 0     Off (power off) can be used for zone off OR system off based on power flag
- 1     Fan Only
- 2     Cooling
- 3     Gas/Furnace Heat (mode 3) - probably propane furnace
- 4     Gas/Furnace Heat (mode 4) - my AquaHot
- 5     Heat Pump Heat
- 6     Dry/Dehumidify
- 7     Heat Strip (Electric)
- 8     Auto Heat/Cool
- 9     Auto Heat/Cool with Heat Strip preference
-10     Auto Heat/Cool with Heat Pump preference
-11     Auto Heat/Cool with Gas/Furnace preference
-12     Electric Heat
-```
+### Device Reset
+If the device becomes unresponsive, use the reboot service or power cycle the device.
 
-## Available PRM (Actual support depends on the installed system)
+## Contributing
 
-```
-Manually setting modes resulted in the following observations
-────────────────────────────────────────────────────────────────────────────────────
-Index  Meaning
-────────────────────────────────────────────────────────────────────────────────────
- 0     Last zone to receive a command
- 1     3 when unit was off / 11 when it was on
- 2     Outdoor temperature as received from weather
- 3     Indoor Temperature
-```
+Issues, feature requests, and pull requests are welcome.
+
+---
+
+**Note**: This integration communicates locally with your device via Bluetooth and does not send data to external services beyond the device's own cloud features.

@@ -1,9 +1,5 @@
 {
     "name": "Micro-Air EasyTouch RV Thermostat MZ",
     "render_readme": true,
-    "domains": [
-        "button",
-        "climate"
-    ],
     "homeassistant": "2024.10.1"
 }
