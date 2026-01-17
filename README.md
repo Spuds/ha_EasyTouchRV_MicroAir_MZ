@@ -1,17 +1,15 @@
-
-
 [![hacs](https://img.shields.io/badge/HACS-default-orange.svg?style=flat-square)](https://hacs.xyz)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.12+-blue.png)
 ![Status](https://img.shields.io/badge/Status-Unofficial-lightgrey.png)
 ![Device](https://img.shields.io/badge/Device-Micro--Air%20EasyTouch%20357-blueviolet.png)
-![Warning](https://img.shields.io/badge/Warning-Stable-green.png)
+![Warning](https://img.shields.io/badge/Warning-Experimental-green.png)
 
 # Micro-Air EasyTouch Multi-Zone (MZ)
 Home Assistant Integration for Multi-Zone Micro-Air EasyTouch RV Thermostats
 
-This integration provides comprehensive Home Assistant control for Micro-Air EasyTouch RV thermostats with enhanced Bluetooth stability, automatic capability discovery, and multi-zone support.  As I only have a model 357 (Dometic CCC1) that is all I've been able to test.  Please see the WIKI for what information has been reverse engineered.
+This integration provides Home Assistant control for Micro-Air EasyTouch RV thermostats with enhanced Bluetooth stability, automatic capability discovery, and multi-zone support.  As I only have a model 357 (Dometic CCC1) that is all I've been able to test.  Please see the WIKI for what protocol information has been reverse engineered.
 
-Originally forked from [micro-air-easytouch](https://github.com/k3vmcd/micro-air-easytouch) by [k3vmcd](https://github.com/k3vmcd), this version has been extensively hacked on in an effort to provide BLE stability fixes, advanced protocol support, and new features.
+Originally forked from [micro-air-easytouch](https://github.com/k3vmcd/micro-air-easytouch) by [k3vmcd](https://github.com/k3vmcd), this version has been extensively hacked on in an effort to provide BLE stability fixes, advanced protocol support, and add new features.
 
 ## Key Features
 
@@ -59,7 +57,7 @@ Originally forked from [micro-air-easytouch](https://github.com/k3vmcd/micro-air
 
 ## Configuration
 
-1. **Enable Bluetooth Discovery**: Ensure your Home Assistant instance can discover Bluetooth devices
+1. **Enable Bluetooth**: Ensure your Home Assistant instance can support GATT Bluetooth connections and that the thermostat is connected via GATT.
 2. **Add Integration**: Go to Settings → Devices & Services → Add Integration
 3. **Device Selection**: Select your EasyTouch device from discovered devices
 4. **Authentication**: Enter your EasyTouch account email and password
@@ -97,7 +95,7 @@ This means the Home Assistant UI will only show controls that your specific devi
 ## Known Limitations
 
 ### Device Limitations
-- Commands take 1-2 seconds to execute (device protocol limitation)
+- Commands take 1-2 seconds to validate (device protocol limitation)
 - Device responds to only one Bluetooth connection at a time
 - Mobile app usage will disconnect Home Assistant temporarily
 - Some older firmware may not support all auto modes
@@ -134,7 +132,7 @@ logger:
 - **Connection Timeout**: Ensure device is powered and in range
 - **Authentication Failed**: Verify email/password credentials
 - **Missing Modes**: Check device MAV configuration - some modes may be disabled
-- **Slow Response**: Normal behavior - device protocol requires 1-2 second delays
+- **Slow Response**: Normal behavior - device protocol requires 1-2 second delays to validate the sent command was successful.  The command is sent right away, but the system must wait to see if it was "accepted"
 
 ### Device Reset
 If the device becomes unresponsive, use the reboot service or power cycle the device.
