@@ -99,7 +99,6 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         ClimateEntityFeature.TARGET_TEMPERATURE
         | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
         | ClimateEntityFeature.FAN_MODE
-        | ClimateEntityFeature.PRESET_MODE
     )
     _attr_temperature_unit = UnitOfTemperature.FAHRENHEIT
     # hvac_modes is now dynamic based on zone configuration
@@ -166,6 +165,21 @@ class MicroAirEasyTouchClimate(ClimateEntity):
     def icon(self) -> str:
         """Return the entity icon."""
         return HVAC_MODE_ICONS.get(self.hvac_mode, "mdi:thermostat")
+
+    @property
+    def supported_features(self) -> ClimateEntityFeature:
+        """Return the list of supported features."""
+        features = (
+            ClimateEntityFeature.TARGET_TEMPERATURE
+            | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+            | ClimateEntityFeature.FAN_MODE
+        )
+
+        # Only include preset mode support when in heating mode
+        if self.hvac_mode == HVACMode.HEAT:
+            features |= ClimateEntityFeature.PRESET_MODE
+
+        return features
 
     @property
     def entity_picture(self) -> str | None:
@@ -384,11 +398,11 @@ class MicroAirEasyTouchClimate(ClimateEntity):
     def preset_modes(self) -> list[str]:
         """Return available heat type presets based on zone configuration."""
         if not self._data:
-            return [PRESET_NONE]
+            return []
 
         # Only show heat type presets when in heating mode
         if self.hvac_mode != HVACMode.HEAT:
-            return [PRESET_NONE]
+            return []
 
         available_presets = [PRESET_NONE]
         for preset_name, mode_num in HEAT_TYPE_PRESETS.items():
