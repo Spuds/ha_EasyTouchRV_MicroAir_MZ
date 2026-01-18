@@ -30,6 +30,7 @@ from .micro_air_easytouch.const import (
     HEAT_TYPE_PRESETS,
     HEAT_TYPE_REVERSE,
     FAN_MODE_MAP,
+    FAN_MODE_REVERSE_MAP,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -281,39 +282,37 @@ class MicroAirEasyTouchClimate(ClimateEntity):
     @property
     def fan_mode(self) -> str | None:
         """Return the current fan mode as a standard Home Assistant name."""
+        # Get the appropriate fan mode number based on current HVAC mode
         if self.hvac_mode == HVACMode.FAN_ONLY:
             fan_mode_num = self._state.get("fan_mode_num", 0)
-            mode = FAN_MODES_FAN_ONLY_REVERSE.get(fan_mode_num, "off")
-            result = FAN_MODE_MAP.get(mode, "auto")
-            _LOGGER.debug(
-                "Zone %d fan-only fan_mode: fan_mode_num=%s, device_mode='%s', final='%s'",
-                self._zone,
-                fan_mode_num,
-                mode,
-                result,
-            )
-            return result
         elif self.hvac_mode == HVACMode.COOL:
             fan_mode_num = self._state.get("cool_fan_mode_num", 128)
-            mode = FAN_MODES_REVERSE.get(fan_mode_num, "full auto")
-            result = FAN_MODE_MAP.get(mode, "auto")
-            _LOGGER.debug(
-                "Zone %d cool fan_mode: fan_mode_num=%s, device_mode='%s', final='%s'",
-                self._zone,
-                fan_mode_num,
-                mode,
-                result,
-            )
-            return result
         elif self.hvac_mode == HVACMode.HEAT:
             fan_mode_num = self._state.get("heat_fan_mode_num", 128)
-            mode = FAN_MODES_REVERSE.get(fan_mode_num, "full auto")
         elif self.hvac_mode == HVACMode.AUTO:
             fan_mode_num = self._state.get("auto_fan_mode_num", 128)
-            mode = FAN_MODES_REVERSE.get(fan_mode_num, "full auto")
         else:
-            mode = "full auto"
-        return FAN_MODE_MAP.get(mode, "auto")
+            return "auto"
+
+        # Use direct mapping from numeric value to Home Assistant fan mode
+        for ha_mode, numeric_values in FAN_MODE_REVERSE_MAP.items():
+            if fan_mode_num in numeric_values:
+                _LOGGER.debug(
+                    "Zone %d fan_mode: %s mode fan_mode_num=%s -> '%s'",
+                    self._zone,
+                    self.hvac_mode,
+                    fan_mode_num,
+                    ha_mode,
+                )
+                return ha_mode
+
+        # Fallback if no direct mapping found
+        _LOGGER.debug(
+            "Zone %d fan_mode: No direct mapping for fan_mode_num=%s, defaulting to 'auto'",
+            self._zone,
+            fan_mode_num,
+        )
+        return "auto"
 
     @property
     def hvac_modes(self) -> list[HVACMode]:
