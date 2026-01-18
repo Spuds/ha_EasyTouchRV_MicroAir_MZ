@@ -73,10 +73,3 @@ FAN_MODE_MAP = {
     "cycledH": "high",
     "full auto": "auto",
 }
-
-FAN_MODE_REVERSE_MAP = {
-    "off": [0],
-    "low": [1, 65],
-    "high": [2, 66],
-    "auto": [128],
-}

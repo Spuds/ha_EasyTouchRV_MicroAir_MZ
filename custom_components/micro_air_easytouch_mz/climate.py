@@ -30,7 +30,6 @@ from .micro_air_easytouch.const import (
     HEAT_TYPE_PRESETS,
     HEAT_TYPE_REVERSE,
     FAN_MODE_MAP,
-    FAN_MODE_REVERSE_MAP,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -385,6 +384,10 @@ class MicroAirEasyTouchClimate(ClimateEntity):
     def preset_modes(self) -> list[str]:
         """Return available heat type presets based on zone configuration."""
         if not self._data:
+            return [PRESET_NONE]
+
+        # Only show heat type presets when in heating mode
+        if self.hvac_mode != HVACMode.HEAT:
             return [PRESET_NONE]
 
         available_presets = [PRESET_NONE]
