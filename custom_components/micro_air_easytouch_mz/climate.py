@@ -30,6 +30,7 @@ from .micro_air_easytouch.const import (
     HEAT_TYPE_PRESETS,
     HEAT_TYPE_REVERSE,
     FAN_MODE_MAP,
+    FAN_MODE_REVERSE_MAP,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -716,7 +717,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             return
 
         # Validate the fan speed is actually available for this mode
-        if available_speeds and fan_value not in available_speeds:
+        if fan_value not in available_speeds:
             _LOGGER.warning(
                 "Fan speed %d not available for zone %s mode %d (available: %s)",
                 fan_value,
