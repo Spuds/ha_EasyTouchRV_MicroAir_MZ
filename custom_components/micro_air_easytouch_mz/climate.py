@@ -631,15 +631,34 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             }
             success = await self._data.send_command(self.hass, ble_device, message)
 
-            # Optimistically update local state for immediate UI feedback and schedule a verification fetch
+            # Optimistically update local state for immediate UI feedback
             if success:
                 try:
                     # Set expected local state so UI updates immediately
+                    old_hvac_mode = self.hvac_mode
                     self._state["mode_num"] = mode
                     if hvac_mode == HVACMode.OFF:
                         self._state["off"] = True
                     else:
                         self._state["on"] = True
+
+                    # Clear fan mode state when changing HVAC modes to let device determine appropriate fan mode
+                    # This prevents validation errors when switching between modes with different fan capabilities
+                    if old_hvac_mode != hvac_mode:
+                        # Clear mode-specific fan state so it gets refreshed from device
+                        for fan_key in [
+                            "fan_mode_num",
+                            "cool_fan_mode_num",
+                            "heat_fan_mode_num",
+                            "auto_fan_mode_num",
+                        ]:
+                            self._state.pop(fan_key, None)
+                        _LOGGER.debug(
+                            "HVAC mode changed from %s to %s, cleared fan mode state for refresh",
+                            old_hvac_mode,
+                            hvac_mode,
+                        )
+
                     self.async_write_ha_state()
                     _LOGGER.debug(
                         "HVAC mode set successfully for zone %s, immediate status update applied",
