@@ -2,7 +2,7 @@
 
 from homeassistant.components.climate import HVACMode
 
-DOMAIN = "micro_air_easytouch_mz"
+DOMAIN = "easytouch_rv_thermostat"
 
 # Map our modes to Home Assistant fan icons
 FAN_MODE_ICONS = {
