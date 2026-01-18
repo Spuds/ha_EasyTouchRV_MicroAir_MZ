@@ -25,11 +25,8 @@ from .micro_air_easytouch.parser import MicroAirEasyTouchBluetoothDeviceData
 from .micro_air_easytouch.const import (
     HA_MODE_TO_EASY_MODE,
     EASY_MODE_TO_HA_MODE,
-    FAN_MODES_FAN_ONLY_REVERSE,
-    FAN_MODES_REVERSE,
     HEAT_TYPE_PRESETS,
     HEAT_TYPE_REVERSE,
-    FAN_MODE_MAP,
     FAN_MODE_REVERSE_MAP,
 )
 

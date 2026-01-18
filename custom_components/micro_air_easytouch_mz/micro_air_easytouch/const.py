@@ -49,8 +49,6 @@ FAN_MODES_FAN_ONLY = {
     "high": 2,  # manualH
 }
 
-FAN_MODES_REVERSE = {v: k for k, v in FAN_MODES_FULL.items()}
-FAN_MODES_FAN_ONLY_REVERSE = {v: k for k, v in FAN_MODES_FAN_ONLY.items()}
 
 # Heat type preset mappings
 HEAT_TYPE_PRESETS = {
@@ -61,18 +59,6 @@ HEAT_TYPE_PRESETS = {
     "Electric Heat": 12,
 }
 HEAT_TYPE_REVERSE = {v: k for k, v in HEAT_TYPE_PRESETS.items()}
-
-# Fan mode mappings for Home Assistant
-FAN_MODE_MAP = {
-    "off": "off",
-    "low": "low",
-    "manualL": "low",
-    "cycledL": "low",
-    "high": "high",
-    "manualH": "high",
-    "cycledH": "high",
-    "full auto": "auto",
-}
 
 FAN_MODE_REVERSE_MAP = {
     "off": [0],
