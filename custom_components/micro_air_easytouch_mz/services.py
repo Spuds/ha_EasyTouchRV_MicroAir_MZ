@@ -122,14 +122,29 @@ async def async_register_services(hass: HomeAssistant) -> None:
     )
 
     # Schema and handler for sending a raw mode integer to a zone (developer testing)
-    SERVICE_TEST_SET_MODE_SCHEMA = vol.Schema(
-        {
-            vol.Optional("address"): cv.string,
-            vol.Optional("entity_id"): cv.entity_id,
-            vol.Required("zone"): vol.All(int, vol.Range(min=0)),
-            vol.Required("mode"): vol.All(int, vol.Range(min=0)),
-            vol.Optional("power", default=1): vol.Any(0, 1),
-        }
+    def validate_address_or_entity(data: dict) -> dict:
+        """Validate that at least one of address or entity_id is provided."""
+        if not data.get("address") and not data.get("entity_id"):
+            raise vol.Invalid("Either 'address' or 'entity_id' is required")
+        return data
+
+    SERVICE_TEST_SET_MODE_SCHEMA = vol.All(
+        vol.Schema(
+            {
+                vol.Optional("address"): cv.string,
+                vol.Optional("entity_id"): cv.entity_id,
+                vol.Required("zone"): vol.All(int, vol.Range(min=0)),
+                vol.Optional("mode"): vol.All(int, vol.Range(min=0)),
+                vol.Optional("power", default=1): vol.Any(0, 1),
+                vol.Optional("coolFan"): vol.All(int, vol.Range(min=0, max=255)),
+                vol.Optional("heatFan"): vol.All(int, vol.Range(min=0, max=255)),
+                vol.Optional("eleFan"): vol.All(int, vol.Range(min=0, max=255)),
+                vol.Optional("fanOnly"): vol.All(int, vol.Range(min=0, max=255)),
+                vol.Optional("dryFan"): vol.All(int, vol.Range(min=0, max=255)),
+                vol.Optional("autoFan"): vol.All(int, vol.Range(min=0, max=255)),
+            }
+        ),
+        validate_address_or_entity,
     )
 
     async def handle_test_set_mode(call: ServiceCall) -> None:
@@ -137,8 +152,14 @@ async def async_register_services(hass: HomeAssistant) -> None:
         address = call.data.get("address")
         entity_id = call.data.get("entity_id")
         zone = int(call.data.get("zone"))
-        mode = int(call.data.get("mode"))
+        mode = call.data.get("mode")
         power = int(call.data.get("power", 1))
+
+        # Extract optional fan modes
+        fan_modes = {}
+        for fan_key in ["coolFan", "heatFan", "eleFan", "fanOnly", "dryFan", "autoFan"]:
+            if fan_key in call.data:
+                fan_modes[fan_key] = call.data[fan_key]
 
         # Resolve config entry similar to request_quick_poll
         config_entry = None
@@ -205,24 +226,30 @@ async def async_register_services(hass: HomeAssistant) -> None:
             )
             return
 
-        # Build and send raw Change command
+        # Build and send raw Change command with optional fan modes
+        changes = {"zone": zone, "power": power}
+        if mode is not None:
+            changes["mode"] = mode
+        changes.update(fan_modes)
+
         command = {
             "Type": "Change",
-            "Changes": {"zone": zone, "mode": mode, "power": power},
+            "Changes": changes,
         }
         try:
             success = await device_data.send_command(hass, ble_device, command)
             if success:
+                mode_str = f"mode {mode}" if mode is not None else "custom fan speeds"
+                if fan_modes:
+                    mode_str += f" with fan settings: {fan_modes}"
                 _LOGGER.info(
-                    "Sent test mode %d to zone %d on device %s", mode, zone, ble_address
+                    "Sent test %s to zone %d on device %s", mode_str, zone, ble_address
                 )
             else:
-                _LOGGER.error(
-                    "Failed to send test mode %d to device %s", mode, ble_address
-                )
+                _LOGGER.error("Failed to send test command to device %s", ble_address)
         except Exception as e:
             _LOGGER.error(
-                "Error sending test mode to device %s: %s", ble_address, str(e)
+                "Error sending test command to device %s: %s", ble_address, str(e)
             )
 
     hass.services.async_register(
