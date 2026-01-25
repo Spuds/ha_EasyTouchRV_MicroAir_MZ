@@ -52,8 +52,8 @@ FAN_MODES_FAN_ONLY = {
 # Heat type preset mappings
 HEAT_TYPE_PRESETS = {
     "Heat Pump": 5,
-    "Gas Furnace": 3,
     "Furnace": 4,
+    "Gas Furnace": 3,
     "Heat Strip": 7,
     "Electric Heat": 12,
 }

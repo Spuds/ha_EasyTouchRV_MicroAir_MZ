@@ -644,12 +644,31 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         if mode is not None:
             # Double-check that the device mode is actually available
             if not self._data.is_mode_available(self._zone, mode):
-                _LOGGER.warning(
-                    "Device mode %d not available for zone %s (MAV check failed)",
-                    mode,
-                    self._zone,
-                )
-                return
+                # For HEAT mode, try to find an available alternative heat mode
+                if hvac_mode == HVACMode.HEAT:
+                    alternative_mode = None
+                    # Iterate through heat modes in preference order
+                    for heat_preset, heat_mode_num in HEAT_TYPE_PRESETS.items():
+                        if self._data.is_mode_available(self._zone, heat_mode_num):
+                            alternative_mode = heat_mode_num
+                            break
+
+                    if alternative_mode is None:
+                        _LOGGER.warning(
+                            "Device mode %d not available for zone %s, and no alternative heat modes available",
+                            mode,
+                            self._zone,
+                        )
+                        return
+
+                    mode = alternative_mode
+                else:
+                    _LOGGER.warning(
+                        "Device mode %d not available for zone %s (MAV check failed)",
+                        mode,
+                        self._zone,
+                    )
+                    return
             # Note: For zone-specific OFF we must send power=1 with mode=0; power=0 is a system-wide OFF (all zones).
             message = {
                 "Type": "Change",
