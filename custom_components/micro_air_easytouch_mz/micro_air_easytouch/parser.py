@@ -885,7 +885,9 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         )
         return [0]
 
-    async def _fetch_zone_configurations(self, client, zones: list[int]) -> None:
+    async def _fetch_zone_configurations(
+        self, client_or_device, zones: list[int]
+    ) -> None:
         """Fetch configuration data (MAV, FA, SPL) for detected zones.
 
         This retrieves the device capabilities that determine which modes and fan speeds
@@ -893,76 +895,125 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         """
         _LOGGER.debug("Fetching configuration data for zones: %s", zones)
 
-        for zone in zones:
-            try:
-                # Send Get Config request for this zone
-                config_cmd = {"Type": "Get Config", "Zone": zone}
-                _LOGGER.debug("Requesting config for zone %d: %s", zone, config_cmd)
+        # Handle both client objects and BLEDevice objects
+        client = None
+        is_temp_client = False
 
-                await client.write_gatt_char(
-                    UUIDS["jsonCmd"],
-                    json.dumps(config_cmd).encode("utf-8"),
-                    response=True,
+        try:
+            # If it's already a client, use it directly
+            if hasattr(client_or_device, "write_gatt_char"):
+                client = client_or_device
+                _LOGGER.debug("Using existing client for config fetch")
+            else:
+                # It's a BLEDevice, create a temporary connection
+                from bleak_retry_connector import (
+                    establish_connection,
+                    BleakClientWithServiceCache,
                 )
-                await asyncio.sleep(0.5)  # Allow device time to prepare response
 
-                payload = await client.read_gatt_char(UUIDS["jsonReturn"])
-                if payload:
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    client_or_device,
+                    client_or_device.address,
+                    timeout=10.0,
+                )
+                if not client or not client.is_connected:
+                    _LOGGER.warning("Failed to connect for config fetch")
+                    return
+
+                # Authenticate
+                if self._password:
                     try:
-                        response = json.loads(payload.decode("utf-8"))
-                        if (
-                            response.get("Type") == "Response"
-                            and response.get("RT") == "Config"
-                        ):
-                            cfg_str = response.get("CFG", "{}")
-                            cfg_data = (
-                                json.loads(cfg_str)
-                                if isinstance(cfg_str, str)
-                                else cfg_str
-                            )
-
-                            # Store configuration data for this zone
-                            if "zone_configs" not in self._device_state:
-                                self._device_state["zone_configs"] = {}
-
-                            self._device_state["zone_configs"][zone] = {
-                                "MAV": cfg_data.get("MAV", 0),  # Mode available bitmask
-                                "FA": cfg_data.get(
-                                    "FA", [0] * 16
-                                ),  # Fan array (16 elements)
-                                "SPL": cfg_data.get(
-                                    "SPL", [60, 85, 60, 85]
-                                ),  # Setpoint limits
-                                "MA": cfg_data.get(
-                                    "MA", [0] * 16
-                                ),  # Mode array (currently unused)
-                            }
-
-                            _LOGGER.debug(
-                                "Zone %d config: MAV=%d, FA=%s, SPL=%s",
-                                zone,
-                                cfg_data.get("MAV", 0),
-                                cfg_data.get("FA", [])[:4],
-                                cfg_data.get("SPL", []),
-                            )
-                        else:
-                            _LOGGER.debug(
-                                "Unexpected config response for zone %d: %s",
-                                zone,
-                                response,
-                            )
-                    except (json.JSONDecodeError, KeyError) as e:
-                        _LOGGER.debug(
-                            "Failed to parse config response for zone %d: %s",
-                            zone,
-                            str(e),
+                        password_bytes = self._password.encode("utf-8")
+                        await client.write_gatt_char(
+                            UUIDS["passwordCmd"], password_bytes, response=True
                         )
-                else:
-                    _LOGGER.debug("No config response received for zone %d", zone)
+                        await asyncio.sleep(0.3)
+                    except Exception as e:
+                        _LOGGER.debug("Auth failed during config fetch: %s", str(e))
+                        return
+                is_temp_client = True
 
-            except Exception as e:
-                _LOGGER.debug("Error fetching config for zone %d: %s", zone, str(e))
-                continue
+            for zone in zones:
+                try:
+                    # Send Get Config request for this zone
+                    config_cmd = {"Type": "Get Config", "Zone": zone}
+                    _LOGGER.debug("Requesting config for zone %d: %s", zone, config_cmd)
+
+                    await client.write_gatt_char(
+                        UUIDS["jsonCmd"],
+                        json.dumps(config_cmd).encode("utf-8"),
+                        response=True,
+                    )
+                    await asyncio.sleep(0.5)  # Allow device time to prepare response
+
+                    payload = await client.read_gatt_char(UUIDS["jsonReturn"])
+                    if payload:
+                        try:
+                            response = json.loads(payload.decode("utf-8"))
+                            if (
+                                response.get("Type") == "Response"
+                                and response.get("RT") == "Config"
+                            ):
+                                cfg_str = response.get("CFG", "{}")
+                                cfg_data = (
+                                    json.loads(cfg_str)
+                                    if isinstance(cfg_str, str)
+                                    else cfg_str
+                                )
+
+                                # Store configuration data for this zone
+                                if "zone_configs" not in self._device_state:
+                                    self._device_state["zone_configs"] = {}
+
+                                self._device_state["zone_configs"][zone] = {
+                                    "MAV": cfg_data.get(
+                                        "MAV", 0
+                                    ),  # Mode available bitmask
+                                    "FA": cfg_data.get(
+                                        "FA", [0] * 16
+                                    ),  # Fan array (16 elements)
+                                    "SPL": cfg_data.get(
+                                        "SPL", [60, 85, 60, 85]
+                                    ),  # Setpoint limits
+                                    "MA": cfg_data.get(
+                                        "MA", [0] * 16
+                                    ),  # Mode array (currently unused)
+                                }
+
+                                _LOGGER.debug(
+                                    "Zone %d config: MAV=%d, FA=%s, SPL=%s",
+                                    zone,
+                                    cfg_data.get("MAV", 0),
+                                    cfg_data.get("FA", [])[:4],
+                                    cfg_data.get("SPL", []),
+                                )
+                            else:
+                                _LOGGER.debug(
+                                    "Unexpected config response for zone %d: %s",
+                                    zone,
+                                    response,
+                                )
+                        except (json.JSONDecodeError, KeyError) as e:
+                            _LOGGER.debug(
+                                "Failed to parse config response for zone %d: %s",
+                                zone,
+                                str(e),
+                            )
+                    else:
+                        _LOGGER.debug("No config response received for zone %d", zone)
+
+                except Exception as e:
+                    _LOGGER.debug("Error fetching config for zone %d: %s", zone, str(e))
+                    continue
+
+        finally:
+            # Clean up temporary client if we created one
+            if is_temp_client and client and client.is_connected:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
 
         _LOGGER.debug(
             "Configuration fetch complete. Stored configs for zones: %s",
@@ -1358,6 +1409,13 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         # Clean disconnect
         await self._disconnect_safely()
 
+        # Clear any cached BLE device references to avoid stale handles on reload
+        try:
+            self._stored_ble_device = None
+            self._ble_device = None
+        except Exception:
+            pass
+
         _LOGGER.debug("Device shutdown complete")
 
     def start_polling(
@@ -1539,9 +1597,25 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         return self._device_state.get("zone_configs", {}).get(zone, {})
 
     def is_mode_available(self, zone: int, mode: int) -> bool:
-        """Check if a specific mode is available for a zone based on MAV bitmask."""
+        """Check if a specific mode is available for a zone based on MAV bitmask.
+
+        Returns True if:
+        - MAV config is loaded and mode bit is set
+        - OR MAV config is missing (0) - allow mode during initial setup/reload
+        """
         config = self.get_zone_config(zone)
         mav = config.get("MAV", 0)
+
+        # If no config available (MAV=0), allow the mode during initial setup
+        # Config will be fetched after first successful poll
+        if mav == 0:
+            _LOGGER.debug(
+                "Zone %d has no MAV config yet (MAV=0), allowing mode %d temporarily",
+                zone,
+                mode,
+            )
+            return True
+
         return (mav & (1 << mode)) > 0
 
     def get_available_modes(self, zone: int) -> list[int]:

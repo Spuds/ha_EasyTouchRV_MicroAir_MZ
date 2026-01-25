@@ -9,7 +9,12 @@ from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform, CONF_PASSWORD, CONF_USERNAME
+from homeassistant.const import (
+    Platform,
+    CONF_PASSWORD,
+    CONF_USERNAME,
+    EVENT_HOMEASSISTANT_STARTED,
+)
 from homeassistant.core import HomeAssistant, callback
 
 from .micro_air_easytouch.parser import MicroAirEasyTouchBluetoothDeviceData
@@ -66,6 +71,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {"data": data}
+
+    @callback
+    async def _refresh_zone_configs_startup(event) -> None:
+        """One-time config fetch at HA start to avoid missing MAV/FA/SPL."""
+        device_state = data.async_get_device_data()
+        existing_configs = device_state.get("zone_configs", {}) if device_state else {}
+
+        # Skip if we already have non-zero MAV configs
+        if existing_configs and all(
+            cfg.get("MAV", 0) != 0 for cfg in existing_configs.values()
+        ):
+            return
+
+        ble_device = async_ble_device_from_address(hass, address)
+        if not ble_device:
+            _LOGGER.debug("Startup zone config fetch skipped; BLE device unavailable")
+            return
+
+        zones = (
+            entry.data.get("detected_zones")
+            or device_state.get("available_zones")
+            or [0]
+        )
+
+        _LOGGER.debug(
+            "Startup zone config fetch for %s (zones=%s)",
+            address,
+            zones,
+        )
+        try:
+            await data._refetch_zone_configurations(hass, ble_device, zones)
+        except Exception as err:
+            _LOGGER.debug("Startup zone config fetch failed: %s", err)
+
+    # Run once after HA fully starts so BLE is ready
+    hass.bus.async_listen_once(
+        EVENT_HOMEASSISTANT_STARTED, _refresh_zone_configs_startup
+    )
 
     # Start polling by default so we can obtain full status for devices that do not advertise
     try:
