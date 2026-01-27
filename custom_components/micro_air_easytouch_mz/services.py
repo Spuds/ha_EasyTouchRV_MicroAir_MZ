@@ -151,7 +151,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
         """Handle the test_set_mode service call (developer-only)."""
         address = call.data.get("address")
         entity_id = call.data.get("entity_id")
-        zone = int(call.data.get("zone"))
+        zone = int(call.data.get("zone", 0))
         mode = call.data.get("mode")
         power = int(call.data.get("power", 1))
 
@@ -421,7 +421,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
         """Handle the test_send_changes service call (developer-only)."""
         address = call.data.get("address")
         entity_id = call.data.get("entity_id")
-        zone = int(call.data.get("zone"))
+        zone = int(call.data.get("zone"), 0)
         changes_dict = call.data.get("changes", {})
 
         # Resolve config entry similar to other services
