@@ -1643,7 +1643,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
 
         if capabilities["fixed_speed"]:
             # Fixed speed mode, often DRY mode - return only the max speed
-            return [capabilities["max_speed"]] if capabilities["max_speed"] > 0 else [0]
+            return [capabilities["max_speed"]] if capabilities["max_speed"] > 0 else [1]
 
         speeds = []
 
@@ -1651,7 +1651,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         if capabilities["allow_off"]:
             speeds.append(0)
 
-        # Add manual speeds 1 through max_speed (only 1, 2, 3 are known)
+        # Add manual speeds 1 through max_speed (only 1, 2, 3 are allowed)
         for speed in range(1, capabilities["max_speed"] + 1):
             if speed > 3:
                 break
