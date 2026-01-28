@@ -41,8 +41,8 @@ EASY_MODE_TO_HA_MODE[11] = HVACMode.AUTO  # Auto with furnace backup
 # Fan mode mappings (general and mode-specific)
 FAN_MODES_FAN_ONLY = {
     FAN_OFF: 0,
-    FAN_LOW: 1,  # manualL
-    FAN_HIGH: 2,  # manualH
+    FAN_LOW: 1,
+    FAN_HIGH: 2,
 }
 
 # Heat type preset mappings

@@ -207,7 +207,8 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         - max_speed=1: {1: 'high'} (single speed is always 'high')
         - max_speed=2: {1: 'low', 2: 'high'}
         - max_speed=3+: {1: 'low', 2: 'medium', 3+: 'high'}
-        - Includes 0: 'off', 64: 'auto', 128: 'auto' only if present in available_speeds
+        - Manual auto speeds (65/66/67) map same as manual speeds (1/2/3)
+        - Includes 0: 'off', 128: 'auto' (full auto) only if present in available_speeds
         """
         speed_map = {}
 
@@ -217,21 +218,27 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                 speed_map[speed] = FAN_OFF
                 continue
 
-            if speed in (64, 128):
+            # Full auto mode
+            if speed == 128:
                 speed_map[speed] = FAN_AUTO
                 continue
 
-            # Manual speeds
+            # Normalize base speed (handles both manual and auto)
+            # Manual auto: 65->1, 66->2, 67->3
+            # Manual: 1->1, 2->2, 3->3
+            base_speed = speed if speed < 64 else speed - 64
+
+            # Map based on max_speed configuration
             if max_speed == 1:
                 speed_map[speed] = FAN_HIGH
             # Two speed systems: 1=low, 2+=high
             elif max_speed == 2:
-                speed_map[speed] = FAN_LOW if speed == 1 else FAN_HIGH
+                speed_map[speed] = FAN_LOW if base_speed == 1 else FAN_HIGH
             # Three+ speed systems: 1=low, 2=medium, 3+=high
             else:
-                if speed == 1:
+                if base_speed == 1:
                     speed_map[speed] = FAN_LOW
-                elif speed == 2:
+                elif base_speed == 2:
                     speed_map[speed] = FAN_MEDIUM
                 else:
                     speed_map[speed] = FAN_HIGH
@@ -402,10 +409,6 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         max_speed = capabilities.get("max_speed", 2)
         speed_map = self._get_speed_name_map(max_speed, available_speeds)
 
-        # Handle cycled variants in cool mode (65/66) as low/high
-        if fan_mode_num in (65, 66):
-            return FAN_LOW if fan_mode_num == 65 else FAN_HIGH
-
         if fan_mode_num in speed_map:
             return speed_map[fan_mode_num]
 
@@ -439,11 +442,6 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                 if ha_mode not in supported_hvac_modes:
                     supported_hvac_modes.append(ha_mode)
 
-        _LOGGER.debug(
-            "Zone %d HVAC modes filtered by MAV: %s",
-            self._zone,
-            [mode.value for mode in supported_hvac_modes],
-        )
         return (
             supported_hvac_modes
             if supported_hvac_modes
@@ -452,7 +450,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
 
     @property
     def fan_modes(self) -> list[str]:
-        """Return available fan modes based on zone configuration and current HVAC mode."""
+        """Return all available fan modes based on zone configuration and current HVAC mode."""
         # Get current device mode number
         current_mode_num = self._state.get("mode_num")
         if current_mode_num is None:
@@ -477,7 +475,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         max_speed = capabilities.get("max_speed", 2)
         speed_map = self._get_speed_name_map(max_speed, available_speeds)
 
-        # Map device fan speeds to HA fan mode names using dynamic mapping
+        # Map device fan speeds to HA fan mode names
         fan_mode_names = []
         for speed in available_speeds:
             if speed in speed_map:
@@ -489,10 +487,11 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             if mode not in unique_modes:
                 unique_modes.append(mode)
 
-        # Allow empty fan_mode values gracefully, HA climate framework may send "" during mode transitions
+        # Allow empty fan_mode values, HA climate framework may send "" during mode transitions
+        # @todo this is a workaround as the framework does not handle different fan capabilities per HVAC mode
         if "" not in unique_modes:
             unique_modes.append("")
-
+    
         return unique_modes if unique_modes else [FAN_AUTO]
 
     @property
@@ -804,9 +803,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             return
 
         # Map standard name to device value and validate
-        current_mode_num = self._state.get(
-            "mode_num", 1
-        )  # Default to fan-only if unknown
+        current_mode_num = self._state.get("mode_num", 1)
         available_speeds = self._data.get_available_fan_speeds(
             self._zone, current_mode_num
         )
@@ -827,37 +824,44 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         if fan_mode == FAN_OFF:
             fan_value = 0
         elif fan_mode == FAN_AUTO:
-            # Use manual auto (64) if available, fallback to full auto (128)
-            fan_value = 64 if 64 in available_speeds else 128
+            fan_value = 128
         elif fan_mode in (FAN_LOW, FAN_MEDIUM, FAN_HIGH):
             # Get candidate speeds for this mode name from dynamic mapping
             candidate_speeds = name_to_speeds.get(fan_mode, [])
 
-            # For cool mode with low/high, preserve manual vs cycled setting
-            if self.hvac_mode == HVACMode.COOL and fan_mode in (FAN_LOW, FAN_HIGH):
-                current_fan_num = self._state.get("cool_fan_mode_num", 1)
-                # Check if currently using cycled variant (65=cycled low, 66=cycled high)
-                if fan_mode == FAN_LOW:
-                    fan_value = 65 if current_fan_num == 65 else 1
-                elif fan_mode == FAN_HIGH:
-                    # For high, use the appropriate speed based on max_speed
-                    base_high_speed = max_speed if max_speed <= 2 else 2
-                    fan_value = 66 if current_fan_num == 66 else base_high_speed
+            # Determine if we should use manual-auto speeds (65/66/67) or manual speeds (1/2/3)
+            is_auto_mode = self.hvac_mode == HVACMode.AUTO
+            allow_manual_auto = capabilities.get("allow_manual_auto", False)
+            
+            # Filter candidates based on mode: prefer 65/66/67 in AUTO mode, 1/2/3 otherwise
+            if is_auto_mode and allow_manual_auto:
+                # In AUTO mode with manual-auto support, prefer 65/66/67 range
+                preferred_speeds = [s for s in candidate_speeds if 64 < s < 128]
+                fallback_speeds = [s for s in candidate_speeds if 0 < s < 64]
             else:
-                # Use first available candidate speed that's actually available
-                fan_value = None
-                for speed in candidate_speeds:
-                    if speed in available_speeds:
-                        fan_value = speed
-                        break
-                if fan_value is None:
-                    _LOGGER.warning(
-                        "No available speed for fan mode %s (candidates: %s, available: %s)",
-                        fan_mode,
-                        candidate_speeds,
-                        available_speeds,
-                    )
-                    return
+                # In standard modes (COOL/HEAT/FAN_ONLY), prefer 1/2/3 range
+                preferred_speeds = [s for s in candidate_speeds if 0 < s < 64]
+                fallback_speeds = [s for s in candidate_speeds if 64 < s < 128]
+            
+            # Try preferred speeds first, then fallback
+            fan_value = next(
+                (s for s in preferred_speeds if s in available_speeds), None
+            )
+            if fan_value is None:
+                fan_value = next(
+                    (s for s in fallback_speeds if s in available_speeds), None
+                )
+            
+            if fan_value is None:
+                _LOGGER.warning(
+                    "No available speed for fan mode %s in %s mode (candidates: %s, available: %s, prefer_auto: %s)",
+                    fan_mode,
+                    self.hvac_mode,
+                    candidate_speeds,
+                    available_speeds,
+                    is_auto_mode and allow_manual_auto,
+                )
+                return
         else:
             _LOGGER.warning("Unknown fan mode: %s", fan_mode)
             return
@@ -949,7 +953,9 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         # Add zone configuration info for debugging (single line per item)
         zone_config = self._data.get_zone_config(self._zone)
         if zone_config:
-            attrs["detected_modes"] = ",".join(str(m) for m in self._data.get_available_modes(self._zone))
+            attrs["detected_modes"] = ",".join(
+                str(m) for m in self._data.get_available_modes(self._zone)
+            )
             attrs["MAV"] = zone_config.get("MAV", 0)
             attrs["SPL"] = ",".join(str(s) for s in zone_config.get("SPL", []))
             attrs["FA"] = ",".join(str(f) for f in zone_config.get("FA", []))
