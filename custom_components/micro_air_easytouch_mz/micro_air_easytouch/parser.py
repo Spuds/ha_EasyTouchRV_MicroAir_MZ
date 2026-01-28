@@ -163,9 +163,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         self._stored_address: str | None = None
 
         # Synchronization for multi-zone safety, Prevents concurrent connection modifications
-        self._client_lock = (
-            asyncio.Lock()
-        )
+        self._client_lock = asyncio.Lock()
         self._command_queue = asyncio.Queue()  # FIFO command execution
         self._queue_worker_task = None  # Manages queue processing
         self._connected = False  # Tracks persistent connection state
@@ -267,12 +265,10 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         self._stored_ble_device = ble_device
         self._stored_address = ble_device.address if ble_device else None
         self._ble_device = ble_device  # Keep existing reference too
-        _LOGGER.debug("Stored BLE device %s for persistent use", self._stored_address)
 
     def set_device_address(self, address: str) -> None:
         """Store device address for creating minimal BLE devices when needed."""
         self._stored_address = address
-        _LOGGER.debug("Stored device address %s for minimal device creation", address)
 
     def get_ble_device(self, hass) -> BLEDevice | None:
         """Get stored BLE device or try to resolve it."""
@@ -307,10 +303,6 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                     name="EasyTouch",  # Generic name
                     details={},
                     rssi=-60,  # Reasonable default
-                )
-                _LOGGER.debug(
-                    "Created minimal BLE device for %s (device may be in low-power mode)",
-                    self._stored_address,
                 )
                 return minimal_device
             except (TypeError, ValueError, AttributeError) as e:
@@ -430,13 +422,19 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 zone_status["rh_sp"] = info[5]  # Dry/Dehumidify RH setpoint
                 zone_status["fan_mode_num"] = info[6]  # Fan setting in fan-only mode
                 zone_status["cool_fan_mode_num"] = info[7]  # Fan setting in cool mode
-                zone_status["heat_fan_mode_num"] = info[8]  # Fan setting in ele_heat mode
+                zone_status["heat_fan_mode_num"] = info[
+                    8
+                ]  # Fan setting in ele_heat mode
                 zone_status["auto_fan_mode_num"] = info[9]  # Fan setting in auto mode
                 zone_status["dry_fan_mode_num"] = info[9]  # Fan setting in dry mode
                 zone_status["mode_num"] = info[10]  # User selected mode
-                zone_status["furnace_fan_mode_num"] = info[11]  # Fan setting in gas_heat modes
+                zone_status["furnace_fan_mode_num"] = info[
+                    11
+                ]  # Fan setting in gas_heat modes
                 zone_status["facePlateTemperature"] = info[12]  # Current temperature
-                zone_status["outdoorTemperature"] = info[13]  # Current outdoor temperature
+                zone_status["outdoorTemperature"] = info[
+                    13
+                ]  # Current outdoor temperature
                 zone_status["active_state_num"] = info[15]  # Active state
 
                 # Check unit power state from PRM[1] bit 3 (System Power flag)
@@ -458,7 +456,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 elif active_state_num & 4:  # Bit 2: Heating active
                     zone_status["current_mode"] = "heat"
                 elif active_state_num & 1:  # Bit 0: Drying active
-                    zone_status["current_mode"] = "dry"    
+                    zone_status["current_mode"] = "dry"
                 elif active_state_num & 32:  # Idle in auto mode
                     zone_status["current_mode"] = "off"
                 else:
@@ -472,7 +470,9 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 # Map fan mode string representations based on current operating mode
                 current_mode = zone_status.get("mode", "off")
                 if current_mode == "fan":
-                    zone_status["fan_mode"] = FAN_MODES_FAN_ONLY.get(zone_status["fan_mode_num"], "off")
+                    zone_status["fan_mode"] = FAN_MODES_FAN_ONLY.get(
+                        zone_status["fan_mode_num"], "off"
+                    )
 
                 zone_data[zone_num] = zone_status
             except (ValueError, IndexError, KeyError) as e:
@@ -690,7 +690,13 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 _LOGGER.error("Failed to send reboot command: %s", str(e))
                 self._increase_operation_delay(hass, ble_device.address, "write")
                 return False
-        except (BleakError, asyncio.TimeoutError, OSError, AttributeError, json.JSONDecodeError) as e:
+        except (
+            BleakError,
+            asyncio.TimeoutError,
+            OSError,
+            AttributeError,
+            json.JSONDecodeError,
+        ) as e:
             _LOGGER.error("Error during reboot: %s", str(e))
             return False
         finally:
@@ -752,7 +758,12 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                         _LOGGER.debug(
                             "Zone probe authentication sent (attempt %d)", attempt + 1
                         )
-                    except (BleakError, asyncio.TimeoutError, OSError, AttributeError) as e:
+                    except (
+                        BleakError,
+                        asyncio.TimeoutError,
+                        OSError,
+                        AttributeError,
+                    ) as e:
                         _LOGGER.debug(
                             "Zone probe authentication failed (attempt %d): %s",
                             attempt + 1,
@@ -839,7 +850,12 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                                 attempt + 1,
                             )
 
-                    except (BleakError, asyncio.TimeoutError, OSError, json.JSONDecodeError) as e:
+                    except (
+                        BleakError,
+                        asyncio.TimeoutError,
+                        OSError,
+                        json.JSONDecodeError,
+                    ) as e:
                         _LOGGER.debug(
                             "Zone probe command %d failed (attempt %d): %s",
                             cmd_index + 1,
@@ -917,7 +933,12 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                             UUIDS["passwordCmd"], password_bytes, response=True
                         )
                         await asyncio.sleep(0.3)
-                    except (BleakError, asyncio.TimeoutError, OSError, AttributeError) as e:
+                    except (
+                        BleakError,
+                        asyncio.TimeoutError,
+                        OSError,
+                        AttributeError,
+                    ) as e:
                         _LOGGER.debug("Auth failed during config fetch: %s", str(e))
                         return
                 is_temp_client = True
@@ -987,7 +1008,12 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                     else:
                         _LOGGER.debug("No config response received for zone %d", zone)
 
-                except (BleakError, asyncio.TimeoutError, OSError, json.JSONDecodeError) as e:
+                except (
+                    BleakError,
+                    asyncio.TimeoutError,
+                    OSError,
+                    json.JSONDecodeError,
+                ) as e:
                     _LOGGER.debug("Error fetching config for zone %d: %s", zone, str(e))
                     continue
 
@@ -1192,10 +1218,6 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
 
                                 # Apply immediate state update for responsive UI
                                 self.decrypt(json_payload)
-                                _LOGGER.debug(
-                                    "Applied immediate status verification after command for zone %d",
-                                    zone,
-                                )
                             else:
                                 _LOGGER.warning(
                                     "No response payload after command verification for zone %d",
@@ -1206,7 +1228,12 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                                 "Failed to send status verification command for zone %d",
                                 zone,
                             )
-                    except (BleakError, asyncio.TimeoutError, OSError, json.JSONDecodeError) as e:
+                    except (
+                        BleakError,
+                        asyncio.TimeoutError,
+                        OSError,
+                        json.JSONDecodeError,
+                    ) as e:
                         _LOGGER.warning(
                             "Error reading command verification (will rely on polling): %s",
                             str(e),
@@ -1216,7 +1243,12 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 self._last_activity_time = time.time()
                 return True
 
-            except (BleakError, asyncio.TimeoutError, OSError, json.JSONDecodeError) as e:
+            except (
+                BleakError,
+                asyncio.TimeoutError,
+                OSError,
+                json.JSONDecodeError,
+            ) as e:
                 _LOGGER.error("Failed to execute command safely: %s", str(e))
                 # Force disconnect on errors to ensure clean state
                 await self._disconnect_safely()
@@ -1523,11 +1555,23 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                                 else:
                                     _LOGGER.debug("Poll failed to establish connection")
                                     self._last_poll_success = False
-                            except (BleakError, asyncio.TimeoutError, OSError, json.JSONDecodeError) as e:
+                            except (
+                                BleakError,
+                                asyncio.TimeoutError,
+                                OSError,
+                                json.JSONDecodeError,
+                            ) as e:
                                 _LOGGER.debug("Error during poll execution: %s", str(e))
                                 self._last_poll_success = False
 
-                except (BleakError, asyncio.TimeoutError, OSError, AttributeError, KeyError, ValueError) as e:
+                except (
+                    BleakError,
+                    asyncio.TimeoutError,
+                    OSError,
+                    AttributeError,
+                    KeyError,
+                    ValueError,
+                ) as e:
                     _LOGGER.debug("Error during poll iteration: %s", str(e))
                     self._last_poll_success = False
                 finally:
@@ -1572,7 +1616,13 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         except asyncio.TimeoutError:
             _LOGGER.error("Command timeout after 30s: %s", command)
             return False
-        except (BleakError, asyncio.TimeoutError, OSError, AttributeError, KeyError) as e:
+        except (
+            BleakError,
+            asyncio.TimeoutError,
+            OSError,
+            AttributeError,
+            KeyError,
+        ) as e:
             _LOGGER.error("Command execution failed: %s", str(e))
             return False
 
@@ -1638,7 +1688,30 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         }
 
     def get_available_fan_speeds(self, zone: int, mode: int) -> list[int]:
-        """Get list of available fan speeds for a zone/mode."""
+        """Get available fan speeds for a zone/mode.
+
+        Returns numeric fan speed values that are valid for the specified zone and mode,
+        based on the device's FA (fan availability) configuration. The returned values
+        depend on whether the mode is an auto mode (8, 9, 10, 11) or not.
+
+        Args:
+            zone: Zone number (0-based)
+            mode: Device mode number (0-11)
+
+        Returns:
+            list[int]: Available fan speed values for this zone/mode combination.
+
+        Special cases:
+            - Fixed speed modes (e.g., DRY): Returns only the configured max_speed
+            - Aqua-hot furnace (FA=32): Returns [0, 128] for simple on/off control
+
+        Examples:
+            2-speed cool mode (non-auto)
+            [0, 1, 2, 128]  # off, low, high, auto
+
+            Auto mode with 3-speed capability
+            [64, 65, 66, 67, 128]  # off, auto-low, auto-medium, auto-high, full-auto
+        """
         capabilities = self.get_fan_capabilities(zone, mode)
 
         if capabilities["fixed_speed"]:
@@ -1646,16 +1719,11 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             return [capabilities["max_speed"]] if capabilities["max_speed"] > 0 else [1]
 
         speeds = []
+        is_auto_mode = mode in [8, 9, 10, 11]
 
-        # Add off speed if allowed
+        # Add off speed if allowed.
         if capabilities["allow_off"]:
             speeds.append(0)
-
-        # Add manual speeds 1 through max_speed (only 1, 2, 3 are allowed)
-        for speed in range(1, capabilities["max_speed"] + 1):
-            if speed > 3:
-                break
-            speeds.append(speed)
 
         # Odd case: aqua-hot furnace mode (FA=32 = max_speed=0, allow_off=True)
         # This represents my aqua-hot furnace which only has auto on/off states
@@ -1667,12 +1735,25 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         ):
             # see climate.py handling for this case, fan_mode()
             speeds.append(128)  # Provide an "auto" state
+            return speeds
 
-        # Add auto modes if allowed
-        if capabilities["allow_manual_auto"]:
-            speeds.append(64)  # Manual auto
+        # In auto modes (8, 9, 10, 11), only manual auto and full auto speeds are valid
+        if is_auto_mode:
+            if capabilities["allow_manual_auto"]:
+                # Manual auto mode uses bit 64 (0x40) combined with the speed
+                # Add manual auto speeds: 65 (64+1), 66 (64+2), 67 (64+3)
+                for speed in range(1, capabilities["max_speed"] + 1):
+                    if speed > 3:
+                        break
+                    speeds.append(64 + speed)
 
-        if capabilities["allow_full_auto"]:
-            speeds.append(128)  # Full auto
+            if capabilities["allow_full_auto"]:
+                speeds.append(128)  # Full auto
+        else:
+            # In non-auto modes, add manual speeds 1 through max_speed (only 1, 2, 3 are allowed)
+            for speed in range(1, capabilities["max_speed"] + 1):
+                if speed > 3:
+                    break
+                speeds.append(speed)
 
         return speeds
