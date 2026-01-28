@@ -345,7 +345,27 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         return self._device_state
 
     def decrypt(self, data: bytes) -> dict:
-        """Parse and decode the device status data."""
+        """Parse and decode the device status data.
+
+        Processes JSON status response from the device to extract zone information,
+        current operating state, setpoints, and active modes. Automatically detects
+        available zones and maps device-specific numeric values to human-readable modes
+        and states.
+
+        Args:
+            data: Bytes containing JSON-encoded device status response from GATT read.
+
+        Returns:
+            dict: Parsed device state with structure
+
+        Raises:
+            Logs but does not raise exceptions. Handles JSON decode errors and
+            missing zone data gracefully by returning default structure.
+
+        Side Effects:
+            - Updates internal `_device_state` with parsed data
+            - Notifies registered update listeners via `_notify_update()`
+        """
         try:
             status = json.loads(data)
         except json.JSONDecodeError as e:
@@ -412,6 +432,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 zone_status["cool_fan_mode_num"] = info[7]  # Fan setting in cool mode
                 zone_status["heat_fan_mode_num"] = info[8]  # Fan setting in ele_heat mode
                 zone_status["auto_fan_mode_num"] = info[9]  # Fan setting in auto mode
+                zone_status["dry_fan_mode_num"] = info[9]  # Fan setting in dry mode
                 zone_status["mode_num"] = info[10]  # User selected mode
                 zone_status["furnace_fan_mode_num"] = info[11]  # Fan setting in gas_heat modes
                 zone_status["facePlateTemperature"] = info[12]  # Current temperature
@@ -431,17 +452,15 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
 
                 # Map active state to current operating mode using bitmask
                 # Active state indicates what the unit is actually doing
-                # Bit 0 (1): Cycle Active - HVAC cycle currently running
-                # Bit 1 (2): Cooling - Zone is actively cooling
-                # Bit 2 (4): Heating - Zone is actively heating
-                # Bit 3 (8): Unknown
-                # Bit 4 (16): Unknown
-                # Bit 5 (32): Auto Heat?
                 active_state_num = zone_status["active_state_num"]
-                if active_state_num & 4:  # Bit 2: Heating
-                    zone_status["current_mode"] = "heat"
-                elif active_state_num & 2:  # Bit 1: Cooling
+                if active_state_num & 2:  # Bit 1: Active cooling
                     zone_status["current_mode"] = "cool"
+                elif active_state_num & 4:  # Bit 2: Heating active
+                    zone_status["current_mode"] = "heat"
+                elif active_state_num & 1:  # Bit 0: Drying active
+                    zone_status["current_mode"] = "dry"    
+                elif active_state_num & 32:  # Idle in auto mode
+                    zone_status["current_mode"] = "off"
                 else:
                     zone_status["current_mode"] = "off"
 
@@ -450,28 +469,10 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 if mode_num in HEAT_TYPE_REVERSE:
                     zone_status["heat_source"] = HEAT_TYPE_REVERSE[mode_num]
 
-                # Store the raw fan mode numbers and their string representations
+                # Map fan mode string representations based on current operating mode
                 current_mode = zone_status.get("mode", "off")
                 if current_mode == "fan":
-                    fan_num = info[6]
-                    zone_status["fan_mode_num"] = fan_num
-                    zone_status["fan_mode"] = FAN_MODES_FAN_ONLY.get(fan_num, "off")
-                elif current_mode in ("cool", "dry"):
-                    fan_num = info[7]
-                    zone_status["cool_fan_mode_num"] = fan_num
-                # For heat modes, use different fan index based on specific mode    
-                elif current_mode in ("heat_on", "heat"):
-                    # Furnace heat modes
-                    if zone_status.get("mode_num") in (3, 4):
-                        fan_num = info[11]
-                        zone_status["furnace_fan_mode_num"] = fan_num
-                    # Heat pump (5), heat strip (7), electric heat (12)   
-                    elif zone_status.get("mode_num") in (5, 7, 12):
-                        fan_num = info[8]
-                        zone_status["heat_fan_mode_num"] = fan_num
-                elif current_mode == "auto":
-                    fan_num = info[9]
-                    zone_status["auto_fan_mode_num"] = fan_num
+                    zone_status["fan_mode"] = FAN_MODES_FAN_ONLY.get(zone_status["fan_mode_num"], "off")
 
                 zone_data[zone_num] = zone_status
             except (ValueError, IndexError, KeyError) as e:
@@ -1641,7 +1642,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         capabilities = self.get_fan_capabilities(zone, mode)
 
         if capabilities["fixed_speed"]:
-            # Fixed speed mode - return only the max speed
+            # Fixed speed mode, often DRY mode - return only the max speed
             return [capabilities["max_speed"]] if capabilities["max_speed"] > 0 else [0]
 
         speeds = []
@@ -1650,19 +1651,22 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         if capabilities["allow_off"]:
             speeds.append(0)
 
-        # Add manual speeds 1 through max_speed
+        # Add manual speeds 1 through max_speed (only 1, 2, 3 are known)
         for speed in range(1, capabilities["max_speed"] + 1):
+            if speed > 3:
+                break
             speeds.append(speed)
 
-        # Special case: Autonomous furnace mode (FA=32, max_speed=0 but allow_off=True)
-        # This represents a furnace where fan is autonomous but UI needs to shows on/off
+        # Odd case: aqua-hot furnace mode (FA=32 = max_speed=0, allow_off=True)
+        # This represents my aqua-hot furnace which only has auto on/off states
         if (
             capabilities["max_speed"] == 0
             and capabilities["allow_off"]
             and not capabilities["allow_manual_auto"]
             and not capabilities["allow_full_auto"]
         ):
-            speeds.append(128)  # Provide autonomous "auto" state
+            # see climate.py handling for this case, fan_mode()
+            speeds.append(128)  # Provide an "auto" state
 
         # Add auto modes if allowed
         if capabilities["allow_manual_auto"]:
