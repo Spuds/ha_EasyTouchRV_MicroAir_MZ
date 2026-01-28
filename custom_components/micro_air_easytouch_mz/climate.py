@@ -34,7 +34,6 @@ from .micro_air_easytouch.const import (
     EASY_MODE_TO_HA_MODE,
     HEAT_TYPE_PRESETS,
     HEAT_TYPE_REVERSE,
-    FAN_MODE_REVERSE_MAP,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -365,6 +364,8 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             fan_mode_num = self._state.get("heat_fan_mode_num", 128)
         elif self.hvac_mode == HVACMode.AUTO:
             fan_mode_num = self._state.get("auto_fan_mode_num", 128)
+        elif self.hvac_mode == HVACMode.DRY:
+            fan_mode_num = self._state.get("dry_fan_mode_num", 128)
         else:
             return FAN_AUTO
 
@@ -374,25 +375,25 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             self._zone, current_mode_num
         )
 
-        # Special handling for auto furnace (speeds [0, 128] only)
+        # Special handling for aqua-hot furnace (speeds [0, 128] only)
         if set(available_speeds) == {0, 128}:
-            # This is an auto furnace - ignore reported fan_mode_num and use simplified logic
+            # This is auto - ignore reported fan_mode_num and use simplified logic
             if fan_mode_num == 0:
                 return FAN_OFF
             else:
                 return FAN_AUTO
 
-        # Normal mapping for other modes
-        for ha_mode, numeric_values in FAN_MODE_REVERSE_MAP.items():
-            if fan_mode_num in numeric_values:
-                _LOGGER.debug(
-                    "Zone %d fan_mode: %s mode fan_mode_num=%s -> '%s'",
-                    self._zone,
-                    self.hvac_mode,
-                    fan_mode_num,
-                    ha_mode,
-                )
-                return ha_mode
+        # Build dynamic mapping based on capabilities and available speeds
+        capabilities = self._data.get_fan_capabilities(self._zone, current_mode_num)
+        max_speed = capabilities.get("max_speed", 2)
+        speed_map = self._get_speed_name_map(max_speed, available_speeds)
+
+        # Handle cycled variants in cool mode (65/66) as low/high
+        if fan_mode_num in (65, 66):
+            return FAN_LOW if fan_mode_num == 65 else FAN_HIGH
+
+        if fan_mode_num in speed_map:
+            return speed_map[fan_mode_num]
 
         # Fallback if no direct mapping found
         _LOGGER.debug(
