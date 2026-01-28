@@ -219,7 +219,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                 continue
 
             # Full auto mode
-            if speed == 128:
+            if speed in (64, 128):
                 speed_map[speed] = FAN_AUTO
                 continue
 
@@ -329,7 +329,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
     def min_temp(self) -> float:
         """Return the minimum temperature from device SPL configuration."""
         config = self._data.get_zone_config(self._zone)
-        spl = config.get("SPL", [60, 85, 55, 85])
+        spl = config.get("SPL", [60, 85, 50, 85])
         # SPL format: [cool_min, cool_max, heat_min, heat_max]
         # Return the minimum of all possible setpoint limits
         return min(spl[0], spl[2]) if len(spl) >= 3 else 50
@@ -338,7 +338,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
     def max_temp(self) -> float:
         """Return the maximum temperature from device SPL configuration."""
         config = self._data.get_zone_config(self._zone)
-        spl = config.get("SPL", [60, 85, 55, 85])
+        spl = config.get("SPL", [60, 85, 50, 85])
         # SPL format: [cool_min, cool_max, heat_min, heat_max]
         # Return the maximum of all possible setpoint limits
         return max(spl[1], spl[3]) if len(spl) >= 4 else 85

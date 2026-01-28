@@ -954,8 +954,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                         json.dumps(config_cmd).encode("utf-8"),
                         response=True,
                     )
-                    await asyncio.sleep(0.5)  # Allow device time to prepare response
-
+                    await asyncio.sleep(0.75)  # Allow device time to prepare response
                     payload = await client.read_gatt_char(UUIDS["jsonReturn"])
                     if payload:
                         try:
@@ -1719,7 +1718,6 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             return [capabilities["max_speed"]] if capabilities["max_speed"] > 0 else [1]
 
         speeds = []
-        is_auto_mode = mode in [8, 9, 10, 11]
 
         # Add off speed if allowed.
         if capabilities["allow_off"]:
@@ -1736,8 +1734,13 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             # see climate.py handling for this case, fan_mode()
             speeds.append(128)  # Provide an "auto" state
             return speeds
+        
+        # Add auto speed if allowed.
+        if capabilities["allow_full_auto"]:
+            speeds.append(128)
 
         # In auto modes (8, 9, 10, 11), only manual auto and full auto speeds are valid
+        is_auto_mode = mode in [8, 9, 10, 11]
         if is_auto_mode:
             if capabilities["allow_manual_auto"]:
                 # Manual auto mode uses bit 64 (0x40) combined with the speed
@@ -1746,11 +1749,8 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                     if speed > 3:
                         break
                     speeds.append(64 + speed)
-
-            if capabilities["allow_full_auto"]:
-                speeds.append(128)  # Full auto
         else:
-            # In non-auto modes, add manual speeds 1 through max_speed (only 1, 2, 3 are allowed)
+            # In non-auto modes, add manual speeds 1 through max_speed
             for speed in range(1, capabilities["max_speed"] + 1):
                 if speed > 3:
                     break
