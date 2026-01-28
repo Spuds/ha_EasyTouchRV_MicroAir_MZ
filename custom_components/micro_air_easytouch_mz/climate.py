@@ -136,9 +136,6 @@ class MicroAirEasyTouchClimate(ClimateEntity):
     )
     _attr_temperature_unit = UnitOfTemperature.FAHRENHEIT
     _attr_should_poll = False
-    # @todo consider using SPL values to set the gauge range
-    _attr_min_temp = 50
-    _attr_max_temp = 85
     _attr_target_temperature_step = 1.0
 
     def __init__(
@@ -149,7 +146,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         self._mac_address = mac_address
         self._zone = zone
         self._attr_unique_id = f"microaireasytouch_{mac_address}_climate_zone_{zone}"
-        self._attr_name = f"Zone {zone}"
+        self._attr_name = None
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"MicroAirEasyTouch_{mac_address}_zone_{zone}")},
             name=f"EasyTouch Zone {zone}",
@@ -320,6 +317,24 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         if self.hvac_mode == HVACMode.AUTO:
             return self._state.get("autoHeat_sp")
         return None
+
+    @property
+    def min_temp(self) -> float:
+        """Return the minimum temperature from device SPL configuration."""
+        config = self._data.get_zone_config(self._zone)
+        spl = config.get("SPL", [60, 85, 55, 85])
+        # SPL format: [cool_min, cool_max, heat_min, heat_max]
+        # Return the minimum of all possible setpoint limits
+        return min(spl[0], spl[2]) if len(spl) >= 3 else 50
+
+    @property
+    def max_temp(self) -> float:
+        """Return the maximum temperature from device SPL configuration."""
+        config = self._data.get_zone_config(self._zone)
+        spl = config.get("SPL", [60, 85, 55, 85])
+        # SPL format: [cool_min, cool_max, heat_min, heat_max]
+        # Return the maximum of all possible setpoint limits
+        return max(spl[1], spl[3]) if len(spl) >= 4 else 85
 
     @property
     def hvac_mode(self) -> HVACMode:
@@ -931,15 +946,13 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             if k in self._state:
                 attrs[k] = self._state[k]
 
-        # Add zone configuration info for debugging
+        # Add zone configuration info for debugging (single line per item)
         zone_config = self._data.get_zone_config(self._zone)
         if zone_config:
-            attrs["zone_config"] = {
-                "available_modes": self._data.get_available_modes(self._zone),
-                "mav_bitmask": zone_config.get("MAV", 0),
-                "setpoint_limits": zone_config.get("SPL", []),
-                "fan_config_sample": zone_config.get("FA", [])[:6],
-            }
+            attrs["detected_modes"] = ",".join(str(m) for m in self._data.get_available_modes(self._zone))
+            attrs["MAV"] = zone_config.get("MAV", 0)
+            attrs["SPL"] = ",".join(str(s) for s in zone_config.get("SPL", []))
+            attrs["FA"] = ",".join(str(f) for f in zone_config.get("FA", []))
 
         return attrs
 
