@@ -948,7 +948,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                         json.dumps(config_cmd).encode("utf-8"),
                         response=True,
                     )
-                    await asyncio.sleep(0.75)  # Allow device time to prepare response
+                    await asyncio.sleep(1)  # Allow device time to prepare response
                     payload = await client.read_gatt_char(UUIDS["jsonReturn"])
                     if payload:
                         try:
@@ -983,7 +983,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                                     "Zone %d config: MAV=%d, FA=%s, SPL=%s",
                                     zone,
                                     cfg_data.get("MAV", 0),
-                                    cfg_data.get("FA", [])[:4],
+                                    cfg_data.get("FA", []),
                                     cfg_data.get("SPL", []),
                                 )
                             else:
@@ -1708,13 +1708,6 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         """
         capabilities = self.get_fan_capabilities(zone, mode)
         
-        _LOGGER.debug(
-            "get_available_fan_speeds: zone=%d, mode=%d, capabilities=%s",
-            zone,
-            mode,
-            capabilities,
-        )
-
         speeds = []
 
         # Add off speed if allowed.
@@ -1738,6 +1731,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             speeds.append(128)
 
         is_auto_mode = mode in POSSIBLE_AUTO_MODES
+        
         if is_auto_mode:
             if capabilities["allow_manual_auto"]:
                 # Manual auto mode uses bit 64 (0x40) combined with the speed
@@ -1753,4 +1747,5 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                     break
                 speeds.append(speed)
 
+        _LOGGER.debug("get_available_fan_speeds RESULT: zone=%d, mode=%d → speeds=%s", zone, mode, speeds)
         return speeds
