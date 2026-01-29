@@ -382,6 +382,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             9: "auto",
             10: "auto",
             11: "auto",
+            12: "heat_on",
         }
 
         hr_status = {}
@@ -1628,20 +1629,17 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
 
         Returns True if:
         - MAV config is loaded and mode bit is set
-        - OR MAV config is missing (0) - allow mode during initial setup/reload
         """
         config = self.get_zone_config(zone)
         mav = config.get("MAV", 0)
 
-        # If no config available (MAV=0), allow the mode during initial setup
+        # If no config available (MAV=0), assume mode is not available.
         # Config will be fetched after first successful poll
         if mav == 0:
             _LOGGER.debug(
-                "Zone %d has no MAV config yet (MAV=0), allowing mode %d temporarily",
+                "Zone %d has no MAV config yet (MAV=0)",
                 zone,
-                mode,
             )
-            return True
 
         return (mav & (1 << mode)) > 0
 
