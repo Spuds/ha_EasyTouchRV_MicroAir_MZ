@@ -23,7 +23,7 @@ from sensor_state_data.enum import StrEnum
 
 # Local imports for constants and domain-specific functionality
 from ..const import DOMAIN
-from .const import UUIDS, FAN_MODES_FAN_ONLY, HEAT_TYPE_REVERSE
+from .const import UUIDS, FAN_MODES_FAN_ONLY, HEAT_TYPE_REVERSE, POSSIBLE_AUTO_MODES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1672,7 +1672,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             }
 
         fa_value = fa_array[mode]
-        
+
         return {
             "max_speed": fa_value & 15,  # Lower 4 bits
             "fixed_speed": (fa_value & 16) > 0,  # Bit 4
@@ -1707,6 +1707,13 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             [64, 65, 66, 67, 128]  # off, auto-low, auto-medium, auto-high, full-auto
         """
         capabilities = self.get_fan_capabilities(zone, mode)
+        
+        _LOGGER.debug(
+            "get_available_fan_speeds: zone=%d, mode=%d, capabilities=%s",
+            zone,
+            mode,
+            capabilities,
+        )
 
         speeds = []
 
@@ -1730,8 +1737,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         if capabilities["allow_full_auto"]:
             speeds.append(128)
 
-        # In auto modes (8, 9, 10, 11), only manual auto and full auto speeds are valid
-        is_auto_mode = mode in [8, 9, 10, 11]
+        is_auto_mode = mode in POSSIBLE_AUTO_MODES
         if is_auto_mode:
             if capabilities["allow_manual_auto"]:
                 # Manual auto mode uses bit 64 (0x40) combined with the speed

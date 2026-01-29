@@ -34,6 +34,8 @@ from .micro_air_easytouch.const import (
     EASY_MODE_TO_HA_MODE,
     HEAT_TYPE_PRESETS,
     HEAT_TYPE_REVERSE,
+    POSSIBLE_HEAT_MODES,
+    POSSIBLE_AUTO_MODES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -475,6 +477,16 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         max_speed = capabilities.get("max_speed", 2)
         speed_map = self._get_speed_name_map(max_speed, available_speeds)
 
+        _LOGGER.debug(
+            "Zone %d mode %d: available_speeds=%s, max_speed=%d, speed_map=%s, capabilities=%s",
+            self._zone,
+            current_mode_num,
+            available_speeds,
+            max_speed,
+            speed_map,
+            capabilities,
+        )
+
         # Map device fan speeds to HA fan mode names
         fan_mode_names = []
         for speed in available_speeds:
@@ -486,6 +498,14 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         for mode in fan_mode_names:
             if mode not in unique_modes:
                 unique_modes.append(mode)
+
+        _LOGGER.debug(
+            "Zone %d mode %d: fan_mode_names=%s, unique_modes=%s",
+            self._zone,
+            current_mode_num,
+            fan_mode_names,
+            unique_modes,
+        )
 
         # Allow empty fan_mode values, HA climate framework may send "" during mode transitions
         # @todo this is a workaround as the framework does not handle different fan capabilities per HVAC mode
@@ -722,7 +742,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                 if hvac_mode == HVACMode.HEAT:
                     alternative_mode = None
                     # Iterate through heat modes in preference order
-                    for heat_preset, heat_mode_num in HEAT_TYPE_PRESETS.items():
+                    for heat_mode_num in POSSIBLE_HEAT_MODES:
                         if self._data.is_mode_available(self._zone, heat_mode_num):
                             alternative_mode = heat_mode_num
                             break
@@ -739,14 +759,8 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                 # For AUTO mode, try to find the first available auto mode
                 elif hvac_mode == HVACMode.AUTO:
                     alternative_mode = None
-                    # Get all auto modes from EASY_MODE_TO_HA_MODE mapping
-                    auto_modes = [
-                        mode_num
-                        for mode_num, ha_mode in EASY_MODE_TO_HA_MODE.items()
-                        if ha_mode == HVACMode.AUTO
-                    ]
                     # Iterate through auto modes in order
-                    for auto_mode_num in sorted(auto_modes):
+                    for auto_mode_num in POSSIBLE_AUTO_MODES:
                         if self._data.is_mode_available(self._zone, auto_mode_num):
                             alternative_mode = auto_mode_num
                             break
