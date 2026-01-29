@@ -422,19 +422,13 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 zone_status["rh_sp"] = info[5]  # Dry/Dehumidify RH setpoint
                 zone_status["fan_mode_num"] = info[6]  # Fan setting in fan-only mode
                 zone_status["cool_fan_mode_num"] = info[7]  # Fan setting in cool mode
-                zone_status["heat_fan_mode_num"] = info[
-                    8
-                ]  # Fan setting in ele_heat mode
+                zone_status["heat_fan_mode_num"] = info[8]  # Fan setting in ele_heat mode
                 zone_status["auto_fan_mode_num"] = info[9]  # Fan setting in auto mode
                 zone_status["dry_fan_mode_num"] = info[9]  # Fan setting in dry mode
                 zone_status["mode_num"] = info[10]  # User selected mode
-                zone_status["furnace_fan_mode_num"] = info[
-                    11
-                ]  # Fan setting in gas_heat modes
+                zone_status["furnace_fan_mode_num"] = info[11]  # Fan setting in gas_heat modes
                 zone_status["facePlateTemperature"] = info[12]  # Current temperature
-                zone_status["outdoorTemperature"] = info[
-                    13
-                ]  # Current outdoor temperature
+                zone_status["outdoorTemperature"] = info[13]  # Current outdoor temperature
                 zone_status["active_state_num"] = info[15]  # Active state
 
                 # Check unit power state from PRM[1] bit 3 (System Power flag)
@@ -980,7 +974,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                                     # Fan array (16 elements)
                                     "FA": cfg_data.get("FA", [0] * 16),
                                     # Setpoint limits array (4 elements)
-                                    "SPL": cfg_data.get("SPL", [60, 85, 55, 85]),
+                                    "SPL": cfg_data.get("SPL", [60, 85, 50, 85]),
                                     # Mode array (currently unused)
                                     "MA": cfg_data.get("MA", [0] * 16),
                                 }
@@ -1678,6 +1672,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             }
 
         fa_value = fa_array[mode]
+        
         return {
             "max_speed": fa_value & 15,  # Lower 4 bits
             "fixed_speed": (fa_value & 16) > 0,  # Bit 4
@@ -1713,14 +1708,10 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         """
         capabilities = self.get_fan_capabilities(zone, mode)
 
-        if capabilities["fixed_speed"]:
-            # Fixed speed mode, often DRY mode - return only the max speed
-            return [capabilities["max_speed"]] if capabilities["max_speed"] > 0 else [1]
-
         speeds = []
 
         # Add off speed if allowed.
-        if capabilities["allow_off"]:
+        if capabilities["allow_off"] or (capabilities["fixed_speed"] and capabilities["max_speed"] == 0):
             speeds.append(0)
 
         # Odd case: aqua-hot furnace mode (FA=32 = max_speed=0, allow_off=True)
