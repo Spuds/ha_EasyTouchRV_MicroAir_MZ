@@ -736,6 +736,30 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                         return
 
                     mode = alternative_mode
+                # For AUTO mode, try to find the first available auto mode
+                elif hvac_mode == HVACMode.AUTO:
+                    alternative_mode = None
+                    # Get all auto modes from EASY_MODE_TO_HA_MODE mapping
+                    auto_modes = [
+                        mode_num
+                        for mode_num, ha_mode in EASY_MODE_TO_HA_MODE.items()
+                        if ha_mode == HVACMode.AUTO
+                    ]
+                    # Iterate through auto modes in order
+                    for auto_mode_num in sorted(auto_modes):
+                        if self._data.is_mode_available(self._zone, auto_mode_num):
+                            alternative_mode = auto_mode_num
+                            break
+
+                    if alternative_mode is None:
+                        _LOGGER.warning(
+                            "Device mode %d not available for zone %s, and no alternative auto modes available",
+                            mode,
+                            self._zone,
+                        )
+                        return
+
+                    mode = alternative_mode
                 else:
                     _LOGGER.warning(
                         "Device mode %d not available for zone %s (MAV check failed)",
