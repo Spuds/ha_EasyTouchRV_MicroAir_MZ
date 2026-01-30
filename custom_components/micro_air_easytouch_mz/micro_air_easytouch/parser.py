@@ -19,11 +19,18 @@ from bleak_retry_connector import (
 from bluetooth_data_tools import short_address
 from bluetooth_sensor_state_data import BluetoothData
 from home_assistant_bluetooth import BluetoothServiceInfo
+from homeassistant.components.climate import HVACMode
 from sensor_state_data.enum import StrEnum
 
 # Local imports for constants and domain-specific functionality
 from ..const import DOMAIN
-from .const import UUIDS, FAN_MODES_FAN_ONLY, HEAT_TYPE_REVERSE, POSSIBLE_AUTO_MODES
+from .const import (
+    UUIDS,
+    FAN_MODES_FAN_ONLY,
+    HEAT_TYPE_REVERSE,
+    POSSIBLE_AUTO_MODES,
+    EASY_MODE_TO_HA_MODE,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -369,22 +376,6 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             return {"available_zones": [0], "zones": {0: {}}}
 
         param = status.get("PRM", [])
-        modes = {
-            0: "off",
-            1: "fan",
-            2: "cool",
-            3: "heat_on",
-            4: "heat",
-            5: "heat_on",
-            6: "dry",
-            7: "heat_on",
-            8: "auto",
-            9: "auto",
-            10: "auto",
-            11: "auto",
-            12: "heat_on",
-        }
-
         hr_status = {}
         hr_status["SN"] = status.get("SN", "Unknown")
         hr_status["ALL"] = status
@@ -401,15 +392,6 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             try:
                 zone_num = int(zone_key)
                 info = status["Z_sts"][zone_key]
-
-                # Ensure info has enough elements
-                if len(info) < 16:
-                    _LOGGER.warning(
-                        "Zone %s has incomplete data (%d elements), skipping",
-                        zone_num,
-                        len(info),
-                    )
-                    continue
 
                 # Only add to available_zones after validation passes
                 available_zones.append(zone_num)
@@ -439,32 +421,34 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                     zone_status["off"] = not system_power_on
                     zone_status["on"] = system_power_on
 
-                # Map modes
-                if zone_status["mode_num"] in modes:
-                    zone_status["mode"] = modes[zone_status["mode_num"]]
+                # Map device numeric mode to Home Assistant HVACMode 
+                mode_num = zone_status.get("mode_num")
+                if mode_num in EASY_MODE_TO_HA_MODE:
+                    zone_status["mode"] = EASY_MODE_TO_HA_MODE[mode_num]
 
                 # Map active state to current operating mode using bitmask
-                # Active state indicates what the unit is actually doing
                 active_state_num = zone_status["active_state_num"]
                 if active_state_num & 2:  # Bit 1: Active cooling
-                    zone_status["current_mode"] = "cool"
+                    zone_status["current_mode"] = HVACMode.COOL
                 elif active_state_num & 4:  # Bit 2: Heating active
-                    zone_status["current_mode"] = "heat"
+                    zone_status["current_mode"] = HVACMode.HEAT
                 elif active_state_num & 1:  # Bit 0: Drying active
-                    zone_status["current_mode"] = "dry"
+                    zone_status["current_mode"] = HVACMode.DRY
                 elif active_state_num & 32:  # Idle in auto mode
-                    zone_status["current_mode"] = "off"
+                    zone_status["current_mode"] = HVACMode.OFF
+                elif active_state_num & 1:  # Fan only active
+                    zone_status["current_mode"] = HVACMode.FAN_ONLY    
                 else:
-                    zone_status["current_mode"] = "off"
+                    zone_status["current_mode"] = HVACMode.OFF
 
-                # Use heat type preset name from constant
+                # Use pretty heat type preset name from constant
                 mode_num = zone_status.get("mode_num")
                 if mode_num in HEAT_TYPE_REVERSE:
                     zone_status["heat_source"] = HEAT_TYPE_REVERSE[mode_num]
 
-                # Map fan mode string representations based on current operating mode
-                current_mode = zone_status.get("mode", "off")
-                if current_mode == "fan":
+                # Map fan mode representations based on user-selected mode.
+                current_mode = zone_status.get("mode", HVACMode.OFF)
+                if current_mode == HVACMode.FAN_ONLY:
                     zone_status["fan_mode"] = FAN_MODES_FAN_ONLY.get(
                         zone_status["fan_mode_num"], "off"
                     )

@@ -347,25 +347,26 @@ class MicroAirEasyTouchClimate(ClimateEntity):
 
     @property
     def hvac_mode(self) -> HVACMode:
-        """Return hvac operation mode."""
+        """Return user selected hvac operation mode."""
         mode_num = self._state.get("mode_num", 0)
         return EASY_MODE_TO_HA_MODE.get(mode_num, HVACMode.OFF)
 
     @property
     def hvac_action(self) -> HVACAction | None:
         """Return the current HVAC action."""
-        current_mode = self._state.get("current_mode")
         if self.hvac_mode == HVACMode.OFF:
             return HVACAction.OFF
-        elif current_mode == "fan":
+
+        current_mode = self._state.get("current_mode")
+        if current_mode == HVACMode.FAN_ONLY:
             return HVACAction.FAN
-        elif current_mode in ["cool", "cool_on"]:
+        if current_mode == HVACMode.COOL:
             return HVACAction.COOLING
-        elif current_mode in ["heat", "heat_on"]:
+        if current_mode == HVACMode.HEAT:
             return HVACAction.HEATING
-        elif current_mode == "dry":
+        if current_mode == HVACMode.DRY:
             return HVACAction.DRYING
-        elif current_mode == "auto":
+        if current_mode == HVACMode.AUTO:
             # In auto mode, determine action based on temperature
             current_temp = self.current_temperature
             low = self.target_temperature_low
