@@ -12,7 +12,7 @@ As I only have a model 357 (Dometic CCC1) that is all I've been able to test.
 
 Requires EasyTouch Firmware > v1.0.5.99
 
-Originally forked from [micro-air-easytouch](https://github.com/k3vmcd/micro-air-easytouch) by [k3vmcd](https://github.com/k3vmcd), this version has been modified in an effort to improve BLE stability, Optimistic/Responsive UI, Supported HVAC mode discovery, Supported Fan mode discovery, Provide Heat presets for multi-fuel setups (Heat-pump + Aqua-hot) and Improved zone discovery.
+Originally forked from [micro-air-easytouch](https://github.com/k3vmcd/ha-micro-air-easytouch) by [k3vmcd](https://github.com/k3vmcd), this version has been modified in an effort to improve BLE stability, Optimistic/Responsive UI, Supported HVAC mode discovery, Supported Fan mode discovery, Provide Heat presets for multi-fuel setups (Heat-pump + Aqua-hot) and Improved zone discovery.
 
 # Installation Via HACS
 1. Add this repository to HACS as a custom repository

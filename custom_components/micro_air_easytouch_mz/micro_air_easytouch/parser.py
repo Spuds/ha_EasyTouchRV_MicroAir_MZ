@@ -463,13 +463,9 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
 
         # Ensure we have at least one zone
         if not available_zones:
-            _LOGGER.warning("No valid zones found, creating default zone 0")
+            _LOGGER.warning("No valid zones found, creating empty zone 0")
             hr_status["available_zones"] = [0]
             hr_status["zones"] = {0: {}}
-
-        # For backward compatibility, if zone 0 exists, copy its data to the root level
-        if 0 in zone_data:
-            hr_status.update(zone_data[0])
 
         # Apply parsed state as authoritative and notify subscribers
         try:

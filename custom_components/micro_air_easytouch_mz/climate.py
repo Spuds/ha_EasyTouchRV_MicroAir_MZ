@@ -179,18 +179,6 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                         list(self._state.keys()) if self._state else "empty",
                     )
                     self.async_write_ha_state()
-            elif self._zone == 0 and device_state:
-                # Fallback for single-zone compatibility
-                old_state = self._state.copy()
-                self._state = device_state.copy()
-
-                if old_state != self._state:
-                    _LOGGER.debug(
-                        "Zone %s state updated (fallback): %s",
-                        self._zone,
-                        list(self._state.keys()) if self._state else "empty",
-                    )
-                    self.async_write_ha_state()
         except (AttributeError, KeyError, TypeError) as e:
             _LOGGER.debug("Error updating zone %s state: %s", self._zone, str(e))
 
@@ -742,7 +730,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                 # For HEAT mode, try to find the first available heat mode
                 if hvac_mode == HVACMode.HEAT:
                     alternative_mode = None
-                    # Iterate through heat modes in preference order
+                    # Iterate through heat modes in order
                     for heat_mode_num in POSSIBLE_HEAT_MODES:
                         if self._data.is_mode_available(self._zone, heat_mode_num):
                             alternative_mode = heat_mode_num
@@ -750,11 +738,18 @@ class MicroAirEasyTouchClimate(ClimateEntity):
 
                     if alternative_mode is None:
                         _LOGGER.warning(
-                            "Device mode %d not available for zone %s, and no alternative heat modes available",
+                            "Device mode %d not available for zone %s, and no alternative auto modes available",
                             mode,
                             self._zone,
                         )
                         return
+                    
+                    _LOGGER.debug(
+                        "Heat mode %d selected for for zone %s (input mode: %d)",
+                        alternative_mode,
+                        self._zone,
+                        mode
+                    )
 
                     mode = alternative_mode
                 # For AUTO mode, try to find the first available auto mode
@@ -773,6 +768,13 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                             self._zone,
                         )
                         return
+                    
+                    _LOGGER.debug(
+                        "Auto mode %d selected for for zone %s (input mode: %d)",
+                        alternative_mode,
+                        self._zone,
+                        mode
+                    )
 
                     mode = alternative_mode
                 else:
@@ -797,12 +799,12 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             if success:
                 try:
                     # Set expected local state so UI updates immediately
-                    old_hvac_mode = self.hvac_mode
                     self._state["mode_num"] = mode
                     if hvac_mode == HVACMode.OFF:
                         self._state["off"] = True
                     else:
                         self._state["on"] = True
+                    self.async_write_ha_state()
 
                 except (AttributeError, KeyError, TypeError) as e:
                     _LOGGER.debug(
