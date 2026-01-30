@@ -1705,7 +1705,8 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             and not capabilities["allow_full_auto"]
         ):
             # see climate.py handling for this case, fan_mode()
-            speeds.append(128)  # Provide an "auto" state
+            speeds.remove(0)
+            speeds.append(128)
             return speeds
         
         # Add auto speed if allowed.

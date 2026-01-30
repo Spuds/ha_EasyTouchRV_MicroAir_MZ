@@ -402,10 +402,10 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             self._zone, current_mode_num
         )
 
-        # Special handling for aqua-hot furnace (speeds [0, 128] only)
-        if set(available_speeds) == {0, 128}:
+        # Special handling for aqua-hot furnace (speeds [128] only)
+        if set(available_speeds) == {128}:
             # This is auto - ignore reported fan_mode_num and use simplified logic
-            return FAN_OFF if fan_mode_num == 0 else FAN_AUTO
+            return FAN_AUTO
 
         # Build dynamic mapping based on capabilities and available speeds
         capabilities = self._data.get_fan_capabilities(self._zone, current_mode_num)
