@@ -483,7 +483,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         )
 
         # Allow empty fan_mode values, HA climate framework may send "" during mode transitions
-        # @todo this is a workaround as the framework does not handle different fan capabilities per HVAC mode
+        # @todo this is a workaround as the framework does not understand different fan capabilities per HVAC mode
         if "" not in unique_modes:
             unique_modes.append("")
 
@@ -753,27 +753,63 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                     )
                     return
             # Note: For zone-specific OFF we must send power=1 with mode=0; power=0 is a system-wide OFF (all zones).
-            message = {
-                "Type": "Change",
-                "Changes": {
-                    "zone": self._zone,
-                    "power": 1,
-                    "mode": mode,
-                },
-            }
+            changes = {"zone": self._zone, "power": 1, "mode": mode}
+
+            # Pick a deterministic fan for the target mode: prefer full-auto (128), otherwise
+            try:
+                available_speeds = self._data.get_available_fan_speeds(self._zone, mode) or []
+
+                fan_value = None
+                # Prefer auto when availalbe otherwise lowest manual
+                if 128 in available_speeds:
+                    fan_value = 128
+                elif 65 in available_speeds:
+                    fan_value = 65
+                elif 1 in available_speeds:   
+                    fan_value = 1
+
+                # Attach the chosen fan field for the target mode if we found one
+                if fan_value is not None:
+                    if hvac_mode == HVACMode.FAN_ONLY:
+                        changes["fanOnly"] = fan_value
+                    elif hvac_mode == HVACMode.COOL:
+                        changes["coolFan"] = fan_value
+                    elif hvac_mode == HVACMode.HEAT:
+                        # Heat modes require gasFan vs eleFan selection depending on mode number
+                        if mode in (3, 4):
+                            changes["gasFan"] = fan_value
+                        else:
+                            changes["eleFan"] = fan_value
+                    elif hvac_mode == HVACMode.AUTO:
+                        changes["autoFan"] = fan_value
+            except Exception:
+                _LOGGER.debug("Failed to determine deterministic fan for zone %s mode %s", self._zone, mode)
+
+            message = {"Type": "Change", "Changes": changes}
             success = await self._data.send_command(self.hass, ble_device, message)
 
             # Optimistically update local state for immediate UI feedback
             if success:
                 try:
-                    # Set expected local state so UI updates immediately
+                    # Set expected local HVAC state
                     self._state["mode_num"] = mode
                     if hvac_mode == HVACMode.OFF:
                         self._state["off"] = True
                     else:
                         self._state["on"] = True
-                    self.async_write_ha_state()
 
+                    # Apply fan update
+                    if "fanOnly" in changes:
+                        self._state["fan_mode_num"] = changes["fanOnly"]
+                    if "coolFan" in changes:
+                        self._state["cool_fan_mode_num"] = changes["coolFan"]
+                    if "gasFan" in changes or "eleFan" in changes:
+                        # Both map to heat_fan_mode_num shown for HA
+                        self._state["heat_fan_mode_num"] = changes.get("gasFan", changes.get("eleFan"))
+                    if "autoFan" in changes:
+                        self._state["auto_fan_mode_num"] = changes["autoFan"]
+
+                    self.async_write_ha_state()
                 except (AttributeError, KeyError, TypeError) as e:
                     _LOGGER.debug("Failed to apply optimistic hvac_mode update: %s", str(e))
             else:
@@ -933,7 +969,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
 
     @property
     def extra_state_attributes(self) -> dict:
-        """Return additional state attributes."""
+        """Return additional state attributes for display in dev tools attributes."""
         attrs: dict = {}
         # Expose some raw fields that maybe useful for debug/automation
         for k in (
