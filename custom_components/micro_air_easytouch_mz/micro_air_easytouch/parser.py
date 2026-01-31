@@ -1562,9 +1562,14 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
 
         speeds = []
 
+        if (capabilities["fixed_speed"] and capabilities["max_speed"] == 0):
+            # Fixed speed mode with max_speed=0 means only one speed (off)
+            speeds.append(-1)
+            return speeds
+
         # Add off speed if allowed.
-        if capabilities["allow_off"] or (capabilities["fixed_speed"] and capabilities["max_speed"] == 0):
-            speeds.append(0)
+        if capabilities["allow_off"]:
+            speeds.append(0)    
 
         # Odd case: aqua-hot furnace mode (FA=32 = max_speed=0, allow_off=True)
         # This represents my aqua-hot furnace which only has auto on/off states

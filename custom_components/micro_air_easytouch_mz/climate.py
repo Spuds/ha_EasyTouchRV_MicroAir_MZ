@@ -198,6 +198,10 @@ class MicroAirEasyTouchClimate(ClimateEntity):
 
         # Only include speeds that are actually available
         for speed in available_speeds:
+            if speed < 0:
+                speed_map[0] = ""
+                continue
+
             if speed == 0:
                 speed_map[speed] = FAN_OFF
                 continue
@@ -473,19 +477,6 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         for mode in fan_mode_names:
             if mode not in unique_modes:
                 unique_modes.append(mode)
-
-        _LOGGER.debug(
-            "Zone %d mode %d: fan_mode_names=%s, unique_modes=%s",
-            self._zone,
-            current_mode_num,
-            fan_mode_names,
-            unique_modes,
-        )
-
-        # Allow empty fan_mode values, HA climate framework may send "" during mode transitions
-        # @todo this is a workaround as the framework does not understand different fan capabilities per HVAC mode
-        if "" not in unique_modes:
-            unique_modes.append("")
 
         return unique_modes if unique_modes else [FAN_AUTO]
 
@@ -765,14 +756,14 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                     fan_value = 128
                 elif 65 in available_speeds:
                     fan_value = 65
-                elif 1 in available_speeds:   
+                elif 1 in available_speeds:
                     fan_value = 1
 
                 # Attach the chosen fan field for the target mode if we found one
                 if fan_value is not None:
                     if hvac_mode == HVACMode.FAN_ONLY:
                         changes["fanOnly"] = fan_value
-                    elif hvac_mode == HVACMode.COOL:
+                    elif hvac_mode == HVACMode.COOL or hvac_mode == HVACMode.DRY:
                         changes["coolFan"] = fan_value
                     elif hvac_mode == HVACMode.HEAT:
                         # Heat modes require gasFan vs eleFan selection depending on mode number
