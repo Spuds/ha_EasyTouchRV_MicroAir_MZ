@@ -487,7 +487,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             _LOGGER.debug("Failed to notify subscribers of decrypted state: %s", str(e))
 
         return hr_status
-
+    
     @retry_bluetooth_connection_error(attempts=7)
     async def _connect_to_device(self, ble_device: BLEDevice):
         """Connect to the device with retries."""
@@ -1640,18 +1640,10 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         """
         config = self.get_zone_config(zone)
         fa_array = config.get("FA", [0] * 16)
-        if mode >= len(fa_array):
-            return {
-                "max_speed": 0,
-                "fixed_speed": True,
-                "allow_off": False,
-                "allow_manual_auto": False,
-                "allow_full_auto": False,
-            }
-
         fa_value = fa_array[mode]
 
         return {
+            "raw_value": fa_value,
             "max_speed": fa_value & 15,  # Lower 4 bits
             "fixed_speed": (fa_value & 16) > 0,  # Bit 4
             "allow_off": (fa_value & 32) > 0,  # Bit 5
@@ -1663,7 +1655,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         """Get available fan speeds for a zone/mode.
 
         Returns numeric fan speed values that are valid for the specified zone and mode,
-        based on the device's FA (fan availability) configuration. The returned values
+        based on the device's FA configuration. The returned values
         depend on whether the mode is an auto mode (8, 9, 10, 11) or not.
 
         Args:

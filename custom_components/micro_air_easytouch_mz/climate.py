@@ -648,6 +648,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                     )
 
                     # Schedule a rollback check in case the device didn't actually change
+                    # The temperature slider can be jittery, so we wait a few seconds and recheck
                     async def _check_and_rollback():
                         await asyncio.sleep(3.0)  # Wait 3 seconds
                         # If our optimistic state hasn't been updated by device response, consider rolling back
