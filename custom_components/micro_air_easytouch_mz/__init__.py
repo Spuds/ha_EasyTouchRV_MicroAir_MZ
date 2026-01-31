@@ -46,19 +46,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store the device address for persistent connection attempts
     data.set_device_address(address)
 
-    # Re-fetch zone configurations if they were detected during setup
+    # Re-fetch zone configurations if they were detected during setup. 
     detected_zones = entry.data.get("detected_zones", [])
     if detected_zones:
         try:
-            from homeassistant.components.bluetooth import async_ble_device_from_address
-
-            ble_device = async_ble_device_from_address(hass, address)
+            ble_device = data.get_ble_device(hass)
             if ble_device:
                 # Re-fetch the zone configurations that were obtained during config flow
                 # This ensures the runtime parser has the same MAV/FA/SPL data
                 await data._refetch_zone_configurations(hass, ble_device, detected_zones)
             else:
-                _LOGGER.warning("Cannot re-fetch zone configs - BLE device not available")
+                _LOGGER.debug("BLE device not available yet; will attempt re-fetch at startup")
         except (OSError, TimeoutError) as e:
             _LOGGER.warning("Failed to re-fetch zone configurations: %s", str(e))
     else:
@@ -81,7 +79,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if existing_configs and all(cfg.get("MAV", 0) != 0 for cfg in existing_configs.values()):
             return
 
-        ble_device = async_ble_device_from_address(hass, address)
+        # Prefer resolving via the device helper which may return a minimal
+        # BLEDevice for connection attempts even if the bluetooth integration
+        # hasn't reported an advertisement yet.
+        ble_device = data.get_ble_device(hass)
         if not ble_device:
             return
 
