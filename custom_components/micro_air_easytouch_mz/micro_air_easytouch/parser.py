@@ -1562,14 +1562,14 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
 
         speeds = []
 
-        if (capabilities["fixed_speed"] and capabilities["max_speed"] == 0):
+        if capabilities["fixed_speed"] and capabilities["max_speed"] == 0:
             # Fixed speed mode with max_speed=0 means only one speed (off)
             speeds.append(-1)
             return speeds
 
         # Add off speed if allowed.
         if capabilities["allow_off"]:
-            speeds.append(0)    
+            speeds.append(0)
 
         # Odd case: aqua-hot furnace mode (FA=32 = max_speed=0, allow_off=True)
         # This represents my aqua-hot furnace which only has auto on/off states
@@ -1589,15 +1589,19 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             speeds.append(128)
 
         is_auto_mode = mode in POSSIBLE_AUTO_MODES
-
         if is_auto_mode:
+            # Add manual auto speeds: 65 (64+1), 66 (64+2), 67 (64+3)
             if capabilities["allow_manual_auto"]:
-                # Manual auto mode uses bit 64 (0x40) combined with the speed
-                # Add manual auto speeds: 65 (64+1), 66 (64+2), 67 (64+3)
                 for speed in range(1, capabilities["max_speed"] + 1):
                     if speed > 3:
                         break
                     speeds.append(64 + speed)
+            # In auto mode but not allow_manual_auto, add manual speeds 1 through max_speed
+            else:
+                for speed in range(1, capabilities["max_speed"] + 1):
+                    if speed > 3:
+                        break
+                    speeds.append(speed)
         else:
             # In non-auto modes, add manual speeds 1 through max_speed
             for speed in range(1, capabilities["max_speed"] + 1):
