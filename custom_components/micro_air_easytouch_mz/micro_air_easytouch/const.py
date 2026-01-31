@@ -40,17 +40,8 @@ EASY_MODE_TO_HA_MODE[10] = HVACMode.AUTO  # Auto with heat pump backup
 
 # Dynamically extracted mode lists (used in mode selection fallback logic)
 # These are extracted from EASY_MODE_TO_HA_MODE and list all possible modes for each HVAC mode
-POSSIBLE_HEAT_MODES = [
-    mode_num
-    for mode_num, ha_mode in EASY_MODE_TO_HA_MODE.items()
-    if ha_mode == HVACMode.HEAT
-]
-
-POSSIBLE_AUTO_MODES = [
-    mode_num
-    for mode_num, ha_mode in EASY_MODE_TO_HA_MODE.items()
-    if ha_mode == HVACMode.AUTO
-]
+POSSIBLE_HEAT_MODES = [mode_num for mode_num, ha_mode in EASY_MODE_TO_HA_MODE.items() if ha_mode == HVACMode.HEAT]
+POSSIBLE_AUTO_MODES = [mode_num for mode_num, ha_mode in EASY_MODE_TO_HA_MODE.items() if ha_mode == HVACMode.AUTO]
 
 # Fan mode mappings (general and mode-specific)
 FAN_MODES_FAN_ONLY = {

@@ -12,9 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.components.bluetooth import async_ble_device_from_address
 
 from .const import DOMAIN
-from .micro_air_easytouch.parser import (
-    MicroAirEasyTouchBluetoothDeviceData,
-)  # Corrected import
+from .micro_air_easytouch.parser import MicroAirEasyTouchBluetoothDeviceData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,9 +36,7 @@ async def async_setup_entry(
 class MicroAirEasyTouchRebootButton(ButtonEntity):
     """Representation of a reboot button for MicroAirEasyTouch."""
 
-    def __init__(
-        self, data: MicroAirEasyTouchBluetoothDeviceData, mac_address: str
-    ) -> None:
+    def __init__(self, data: MicroAirEasyTouchBluetoothDeviceData, mac_address: str) -> None:
         """Initialize the button."""
         self._data = data
         self._mac_address = mac_address
@@ -67,9 +63,7 @@ class MicroAirEasyTouchRebootButton(ButtonEntity):
 class MicroAirEasyTouchPowerToggleButton(ButtonEntity):
     """Toggle button for system-wide power control (all zones on/off)."""
 
-    def __init__(
-        self, data: MicroAirEasyTouchBluetoothDeviceData, mac_address: str
-    ) -> None:
+    def __init__(self, data: MicroAirEasyTouchBluetoothDeviceData, mac_address: str) -> None:
         self._data = data
         self._mac_address = mac_address
         self._attr_unique_id = f"microaireasytouch_{self._mac_address}_power_toggle"
@@ -147,9 +141,7 @@ class MicroAirEasyTouchPowerToggleButton(ButtonEntity):
 
         ble_device = async_ble_device_from_address(self.hass, self._mac_address)
         if not ble_device:
-            _LOGGER.error(
-                "Could not find BLE device to send power toggle: %s", self._mac_address
-            )
+            _LOGGER.error("Could not find BLE device to send power toggle: %s", self._mac_address)
             return
 
         # Send power command to zone 0 to turn on/off system power
@@ -167,6 +159,4 @@ class MicroAirEasyTouchPowerToggleButton(ButtonEntity):
             self._update_attributes()
             self.async_write_ha_state()
         else:
-            _LOGGER.error(
-                "Failed to send system-wide %s to device %s", action, self._mac_address
-            )
+            _LOGGER.error("Failed to send system-wide %s to device %s", action, self._mac_address)

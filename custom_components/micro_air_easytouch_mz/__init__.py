@@ -26,8 +26,8 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up MicroAirEasyTouch from a config entry.
 
-    This function is called to set up the MicroAirEasyTouch device from a configuration entry 
-    in Home Assistant. It initializes the device data, sets up the Bluetooth 
+    This function is called to set up the MicroAirEasyTouch device from a configuration entry
+    in Home Assistant. It initializes the device data, sets up the Bluetooth
     connection, and fetches any detected zone configurations.
 
     Args:
@@ -46,7 +46,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store the device address for persistent connection attempts
     data.set_device_address(address)
 
-
     # Re-fetch zone configurations if they were detected during setup
     detected_zones = entry.data.get("detected_zones", [])
     if detected_zones:
@@ -57,19 +56,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if ble_device:
                 # Re-fetch the zone configurations that were obtained during config flow
                 # This ensures the runtime parser has the same MAV/FA/SPL data
-                await data._refetch_zone_configurations(
-                    hass, ble_device, detected_zones
-                )
+                await data._refetch_zone_configurations(hass, ble_device, detected_zones)
             else:
-                _LOGGER.warning(
-                    "Cannot re-fetch zone configs - BLE device not available"
-                )
+                _LOGGER.warning("Cannot re-fetch zone configs - BLE device not available")
         except (OSError, TimeoutError) as e:
             _LOGGER.warning("Failed to re-fetch zone configurations: %s", str(e))
     else:
-        _LOGGER.warning(
-            "No detected zones found in config entry, skipping zone config re-fetch"
-        )
+        _LOGGER.warning("No detected zones found in config entry, skipping zone config re-fetch")
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {"data": data}
 
@@ -77,28 +70,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _refresh_zone_configs_startup(event: Event | None = None) -> None:
         """One-time config fetch at HA start to avoid missing MAV/FA/SPL data.
 
-        This function is called once at Home Assistant startup to fetch the 
-        zone configurations. It ensures that the device has the latest 
+        This function is called once at Home Assistant startup to fetch the
+        zone configurations. It ensures that the device has the latest
         configuration data and avoids missing any important MAV/FA/SPL data.
         """
         device_state = data.async_get_device_data()
         existing_configs = device_state.get("zone_configs", {}) if device_state else {}
 
         # Skip if we already have non-zero MAV configs
-        if existing_configs and all(
-            cfg.get("MAV", 0) != 0 for cfg in existing_configs.values()
-        ):
+        if existing_configs and all(cfg.get("MAV", 0) != 0 for cfg in existing_configs.values()):
             return
 
         ble_device = async_ble_device_from_address(hass, address)
         if not ble_device:
             return
 
-        zones = (
-            entry.data.get("detected_zones")
-            or device_state.get("available_zones")
-            or [0]
-        )
+        zones = entry.data.get("detected_zones") or device_state.get("available_zones") or [0]
 
         _LOGGER.debug("Startup zone config fetch for %s (zones=%s)", address, zones)
         try:
@@ -107,9 +94,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Startup zone config fetch failed: %s", err)
 
     # Run once after HA starts so BLE is ready
-    hass.bus.async_listen_once(
-        EVENT_HOMEASSISTANT_STARTED, _refresh_zone_configs_startup
-    )
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _refresh_zone_configs_startup)
 
     # Start polling by default so we obtain status (microair does not advertise)
     try:
@@ -121,9 +106,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     def _handle_bluetooth_update(service_info: BluetoothServiceInfoBleak) -> None:
         """Update device info from advertisements."""
         if service_info.address == address:
-            _LOGGER.debug(
-                "Received BLE advertisement from %s: %s", address, service_info
-            )
+            _LOGGER.debug("Received BLE advertisement from %s: %s", address, service_info)
             data._start_update(service_info)
 
     hass.bus.async_listen("bluetooth_service_info", _handle_bluetooth_update)
@@ -138,7 +121,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry.
 
     This function is called to unload a configuration entry from Home Assistant.
-    It ensures that all associated platforms are unloaded and performs any 
+    It ensures that all associated platforms are unloaded and performs any
     necessary cleanup for the device data.
 
     Args:

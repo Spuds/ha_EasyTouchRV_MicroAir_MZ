@@ -32,9 +32,7 @@ class MicroAirEasyTouchConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered_device: MicroAirEasyTouchBluetoothDeviceData | None = None
         self._discovered_devices: dict[str, str] = {}
 
-    async def async_step_bluetooth(
-        self, discovery_info: BluetoothServiceInfoBleak
-    ) -> FlowResult:
+    async def async_step_bluetooth(self, discovery_info: BluetoothServiceInfoBleak) -> FlowResult:
         """Handle the bluetooth discovery step."""
         await self.async_set_unique_id(discovery_info.address)
         self._abort_if_unique_id_configured()
@@ -45,9 +43,7 @@ class MicroAirEasyTouchConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered_device = device
         return await self.async_step_password()
 
-    async def async_step_password(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_password(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle password and email entry with zone detection."""
         errors = {}
         if user_input is not None:
@@ -63,16 +59,10 @@ class MicroAirEasyTouchConfigFlow(ConfigFlow, domain=DOMAIN):
                         async_ble_device_from_address,
                     )
 
-                    ble_device = async_ble_device_from_address(
-                        self.hass, self._discovery_info.address
-                    )
+                    ble_device = async_ble_device_from_address(self.hass, self._discovery_info.address)
                     if ble_device:
                         # Perform zone detection during credential validation
-                        available_zones = (
-                            await self._discovered_device.get_available_zones(
-                                self.hass, ble_device
-                            )
-                        )
+                        available_zones = await self._discovered_device.get_available_zones(self.hass, ble_device)
                         if available_zones:
                             # Store detected zones in the device config for later use
                             self._discovered_device._detected_zones = available_zones
@@ -82,16 +72,12 @@ class MicroAirEasyTouchConfigFlow(ConfigFlow, domain=DOMAIN):
                                 available_zones,
                             )
                         else:
-                            _LOGGER.warning(
-                                "Config flow could not detect zones; will fallback to single zone"
-                            )
+                            _LOGGER.warning("Config flow could not detect zones; will fallback to single zone")
                             self._discovered_device._detected_zones = [0]
 
                 return await self.async_step_bluetooth_confirm(user_input)
             except Exception as e:
-                _LOGGER.error(
-                    "Credential validation or zone detection failed: %s", str(e)
-                )
+                _LOGGER.error("Credential validation or zone detection failed: %s", str(e))
                 errors["base"] = "invalid_auth"
 
         return self.async_show_form(
@@ -106,9 +92,7 @@ class MicroAirEasyTouchConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={},
         )
 
-    async def async_step_bluetooth_confirm(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_bluetooth_confirm(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Confirm discovery."""
         assert self._discovered_device is not None
         device = self._discovered_device
@@ -124,10 +108,7 @@ class MicroAirEasyTouchConfigFlow(ConfigFlow, domain=DOMAIN):
             }
 
             # Add detected zones if available
-            if (
-                hasattr(self._discovered_device, "_detected_zones")
-                and self._discovered_device._detected_zones
-            ):
+            if hasattr(self._discovered_device, "_detected_zones") and self._discovered_device._detected_zones:
                 config_data["detected_zones"] = self._discovered_device._detected_zones
                 import logging
 
@@ -142,13 +123,9 @@ class MicroAirEasyTouchConfigFlow(ConfigFlow, domain=DOMAIN):
         self._set_confirm_only()
         placeholders = {"name": title}
         self.context["title_placeholders"] = placeholders
-        return self.async_show_form(
-            step_id="bluetooth_confirm", description_placeholders=placeholders
-        )
+        return self.async_show_form(step_id="bluetooth_confirm", description_placeholders=placeholders)
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the user step to pick discovered device."""
         if user_input is not None:
             address = user_input[CONF_ADDRESS]
@@ -177,16 +154,12 @@ class MicroAirEasyTouchConfigFlow(ConfigFlow, domain=DOMAIN):
                 continue
             device = MicroAirEasyTouchBluetoothDeviceData(password=None)
             if device.supported(discovery_info):
-                self._discovered_devices[address] = (
-                    device.title or device.get_device_name() or discovery_info.name
-                )
+                self._discovered_devices[address] = device.title or device.get_device_name() or discovery_info.name
 
         if not self._discovered_devices:
             return self.async_abort(reason="no_devices_found")
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
-                {vol.Required(CONF_ADDRESS): vol.In(self._discovered_devices)}
-            ),
+            data_schema=vol.Schema({vol.Required(CONF_ADDRESS): vol.In(self._discovered_devices)}),
         )

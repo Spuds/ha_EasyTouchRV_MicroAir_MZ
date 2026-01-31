@@ -25,12 +25,8 @@ def _normalize(s: str) -> str:
 SERVICE_SET_LOCATION_SCHEMA = vol.Schema(
     {
         vol.Required("address"): cv.string,
-        vol.Required("latitude"): vol.All(
-            vol.Coerce(float), vol.Range(min=-90.0, max=90.0)
-        ),
-        vol.Required("longitude"): vol.All(
-            vol.Coerce(float), vol.Range(min=-180.0, max=180.0)
-        ),
+        vol.Required("latitude"): vol.All(vol.Coerce(float), vol.Range(min=-90.0, max=90.0)),
+        vol.Required("longitude"): vol.All(vol.Coerce(float), vol.Range(min=-180.0, max=180.0)),
     }
 )
 
@@ -52,15 +48,11 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 break
 
         if not config_entry:
-            _LOGGER.error(
-                "No MicroAirEasyTouch config entry found for address %s", address
-            )
+            _LOGGER.error("No MicroAirEasyTouch config entry found for address %s", address)
             return
 
         # Get the device data
-        device_data: MicroAirEasyTouchBluetoothDeviceData = hass.data[DOMAIN][
-            config_entry.entry_id
-        ]["data"]
+        device_data: MicroAirEasyTouchBluetoothDeviceData = hass.data[DOMAIN][config_entry.entry_id]["data"]
         mac_address = config_entry.unique_id
         assert mac_address is not None
 
@@ -80,9 +72,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             ble_device = device_data.get_ble_device(hass)
 
         if not ble_device:
-            _LOGGER.error(
-                "Could not create any BLE device reference for address %s", mac_address
-            )
+            _LOGGER.error("Could not create any BLE device reference for address %s", mac_address)
             return
 
         # Construct the command
@@ -105,13 +95,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
                     mac_address,
                 )
             else:
-                _LOGGER.error(
-                    "Failed to send location command to device %s", mac_address
-                )
+                _LOGGER.error("Failed to send location command to device %s", mac_address)
         except Exception as e:
-            _LOGGER.error(
-                "Error sending location command to device %s: %s", mac_address, str(e)
-            )
+            _LOGGER.error("Error sending location command to device %s: %s", mac_address, str(e))
 
     # Register the set_location service
     hass.services.async_register(
@@ -175,9 +161,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 registry = er.async_get(hass)
                 entity = registry.async_get(entity_id)
                 if entity and entity.config_entry_id:
-                    config_entry = hass.config_entries.async_get_entry(
-                        entity.config_entry_id
-                    )
+                    config_entry = hass.config_entries.async_get_entry(entity.config_entry_id)
             except Exception:
                 pass
 
@@ -189,9 +173,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
                     break
 
         if not config_entry:
-            known = [
-                entry.unique_id for entry in hass.config_entries.async_entries(DOMAIN)
-            ]
+            known = [entry.unique_id for entry in hass.config_entries.async_entries(DOMAIN)]
             _LOGGER.error(
                 "No MicroAirEasyTouch config entry found for address/entity '%s' (known entries: %s)",
                 address or entity_id,
@@ -199,9 +181,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             )
             return
 
-        device_data: MicroAirEasyTouchBluetoothDeviceData = hass.data[DOMAIN][
-            config_entry.entry_id
-        ]["data"]
+        device_data: MicroAirEasyTouchBluetoothDeviceData = hass.data[DOMAIN][config_entry.entry_id]["data"]
 
         # Determine BLE address to use and get stored device with fallback
         ble_address = address or config_entry.unique_id
@@ -221,9 +201,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             ble_device = device_data.get_ble_device(hass)
 
         if not ble_device:
-            _LOGGER.error(
-                "Could not create any BLE device reference for address %s", ble_address
-            )
+            _LOGGER.error("Could not create any BLE device reference for address %s", ble_address)
             return
 
         # Build and send raw Change command with optional fan modes
@@ -242,15 +220,11 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 mode_str = f"mode {mode}" if mode is not None else "custom fan speeds"
                 if fan_modes:
                     mode_str += f" with fan settings: {fan_modes}"
-                _LOGGER.info(
-                    "Sent test %s to zone %d on device %s", mode_str, zone, ble_address
-                )
+                _LOGGER.info("Sent test %s to zone %d on device %s", mode_str, zone, ble_address)
             else:
                 _LOGGER.error("Failed to send test command to device %s", ble_address)
         except Exception as e:
-            _LOGGER.error(
-                "Error sending test command to device %s: %s", ble_address, str(e)
-            )
+            _LOGGER.error("Error sending test command to device %s: %s", ble_address, str(e))
 
     hass.services.async_register(
         DOMAIN,
@@ -290,9 +264,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 registry = er.async_get(hass)
                 entity = registry.async_get(entity_id)
                 if entity and entity.config_entry_id:
-                    config_entry = hass.config_entries.async_get_entry(
-                        entity.config_entry_id
-                    )
+                    config_entry = hass.config_entries.async_get_entry(entity.config_entry_id)
             except Exception:
                 pass
 
@@ -304,9 +276,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
                     break
 
         if not config_entry:
-            known = [
-                entry.unique_id for entry in hass.config_entries.async_entries(DOMAIN)
-            ]
+            known = [entry.unique_id for entry in hass.config_entries.async_entries(DOMAIN)]
             _LOGGER.error(
                 "No MicroAirEasyTouch config entry found for address/entity '%s' (known entries: %s)",
                 address or entity_id,
@@ -314,9 +284,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             )
             return
 
-        device_data: MicroAirEasyTouchBluetoothDeviceData = hass.data[DOMAIN][
-            config_entry.entry_id
-        ]["data"]
+        device_data: MicroAirEasyTouchBluetoothDeviceData = hass.data[DOMAIN][config_entry.entry_id]["data"]
 
         # Determine BLE address to use and get stored device with fallback
         ble_address = address or config_entry.unique_id
@@ -336,9 +304,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             ble_device = device_data.get_ble_device(hass)
 
         if not ble_device:
-            _LOGGER.error(
-                "Could not create any BLE device reference for address %s", ble_address
-            )
+            _LOGGER.error("Could not create any BLE device reference for address %s", ble_address)
             return
 
         # Build and send command with configurable type
@@ -361,15 +327,11 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 # Read the response and log it for debugging
                 from .micro_air_easytouch.const import UUIDS
 
-                json_payload = await device_data._read_gatt_with_retry(
-                    hass, UUIDS["jsonReturn"], ble_device
-                )
+                json_payload = await device_data._read_gatt_with_retry(hass, UUIDS["jsonReturn"], ble_device)
                 if json_payload:
                     try:
                         payload_str = json_payload.decode("utf-8")
-                        _LOGGER.debug(
-                            "Raw status response for zone %d: %s", zone, payload_str
-                        )
+                        _LOGGER.debug("Raw status response for zone %d: %s", zone, payload_str)
 
                         # Also parse and log in a more readable format
                         parsed_data = device_data.decrypt(json_payload)
@@ -396,9 +358,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             else:
                 _LOGGER.error("Failed to send status request to device %s", ble_address)
         except Exception as e:
-            _LOGGER.error(
-                "Error requesting status from device %s: %s", ble_address, str(e)
-            )
+            _LOGGER.error("Error requesting status from device %s: %s", ble_address, str(e))
 
     hass.services.async_register(
         DOMAIN,
@@ -438,9 +398,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 registry = er.async_get(hass)
                 entity = registry.async_get(entity_id)
                 if entity and entity.config_entry_id:
-                    config_entry = hass.config_entries.async_get_entry(
-                        entity.config_entry_id
-                    )
+                    config_entry = hass.config_entries.async_get_entry(entity.config_entry_id)
             except Exception:
                 pass
 
@@ -452,9 +410,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
                     break
 
         if not config_entry:
-            known = [
-                entry.unique_id for entry in hass.config_entries.async_entries(DOMAIN)
-            ]
+            known = [entry.unique_id for entry in hass.config_entries.async_entries(DOMAIN)]
             _LOGGER.error(
                 "No MicroAirEasyTouch config entry found for address/entity '%s' (known entries: %s)",
                 address or entity_id,
@@ -462,9 +418,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             )
             return
 
-        device_data: MicroAirEasyTouchBluetoothDeviceData = hass.data[DOMAIN][
-            config_entry.entry_id
-        ]["data"]
+        device_data: MicroAirEasyTouchBluetoothDeviceData = hass.data[DOMAIN][config_entry.entry_id]["data"]
 
         # Determine BLE address to use and get stored device with fallback
         ble_address = address or config_entry.unique_id
@@ -484,9 +438,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             ble_device = device_data.get_ble_device(hass)
 
         if not ble_device:
-            _LOGGER.error(
-                "Could not create any BLE device reference for address %s", ble_address
-            )
+            _LOGGER.error("Could not create any BLE device reference for address %s", ble_address)
             return
 
         # Build and send custom Change command with arbitrary changes
@@ -511,9 +463,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             else:
                 _LOGGER.error("Failed to send test changes to device %s", ble_address)
         except Exception as e:
-            _LOGGER.error(
-                "Error sending test changes to device %s: %s", ble_address, str(e)
-            )
+            _LOGGER.error("Error sending test changes to device %s: %s", ble_address, str(e))
 
     hass.services.async_register(
         DOMAIN,
