@@ -379,6 +379,8 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             fan_mode_num = self._state.get("auto_fan_mode_num", 128)
         elif self.hvac_mode == HVACMode.DRY:
             fan_mode_num = self._state.get("dry_fan_mode_num", 128)
+        elif self.hvac_mode == HVACMode.OFF:
+            fan_mode_num = 0
         else:
             return FAN_AUTO
 
@@ -387,9 +389,11 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         available_speeds = self._data.get_available_fan_speeds(self._zone, current_mode_num)
 
         # Special handling for aqua-hot furnace (speeds [128] only)
-        if set(available_speeds) == {128}:
-            # This is auto - ignore reported fan_mode_num and use simplified logic
+        if available_speeds == [128]:
             return FAN_AUTO
+        
+        if available_speeds == [-1]:
+            return FAN_OFF
 
         # Build dynamic mapping based on capabilities and available speeds
         capabilities = self._data.get_fan_capabilities(self._zone, current_mode_num)
@@ -450,6 +454,8 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             if self.hvac_mode == HVACMode.FAN_ONLY:
                 return [FAN_OFF, FAN_LOW, FAN_HIGH]
             return [FAN_OFF, FAN_LOW, FAN_HIGH, FAN_AUTO]
+        elif available_speeds == [-1]:
+            return [FAN_OFF]
 
         # Get max_speed from capabilities to build dynamic mapping
         capabilities = self._data.get_fan_capabilities(self._zone, current_mode_num)
@@ -495,7 +501,8 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             if self._data.is_mode_available(self._zone, mode_num):
                 available_presets.append(preset_name)
 
-        return available_presets
+        # Only show presets if there are multiple options
+        return available_presets if len(available_presets) > 1 else []
 
     @property
     def preset_mode(self) -> str:

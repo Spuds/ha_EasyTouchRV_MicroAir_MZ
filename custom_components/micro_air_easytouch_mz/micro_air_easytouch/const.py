@@ -59,3 +59,8 @@ HEAT_TYPE_PRESETS = {
     "Electric Heat": 12,
 }
 HEAT_TYPE_REVERSE = {v: k for k, v in HEAT_TYPE_PRESETS.items()}
+
+FAN_AUTO_LOW = "Auto Low"
+FAN_AUTO_MEDIUM = "Auto Medium"
+FAN_AUTO_HIGH = "Auto High"
+FAN_FIXED = "Fixed"
