@@ -374,7 +374,12 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         elif self.hvac_mode == HVACMode.COOL:
             fan_mode_num = self._state.get("cool_fan_mode_num", 128)
         elif self.hvac_mode == HVACMode.HEAT:
-            fan_mode_num = self._state.get("heat_fan_mode_num", 128)
+            # HEAT mode can be electric heat or gas heat (furnace)
+            mode_num = self._state.get("mode_num", 4)
+            if mode_num in (3, 4):
+                fan_mode_num = self._state.get("furnace_fan_mode_num", 128)
+            else:
+                fan_mode_num = self._state.get("heat_fan_mode_num", 128)
         elif self.hvac_mode == HVACMode.AUTO:
             fan_mode_num = self._state.get("auto_fan_mode_num", 128)
         elif self.hvac_mode == HVACMode.DRY:
@@ -391,7 +396,7 @@ class MicroAirEasyTouchClimate(ClimateEntity):
         # Special handling for aqua-hot furnace (speeds [128] only)
         if available_speeds == [128]:
             return FAN_AUTO
-        
+
         if available_speeds == [-1]:
             return FAN_OFF
 
@@ -802,8 +807,11 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                     if "coolFan" in changes:
                         self._state["cool_fan_mode_num"] = changes["coolFan"]
                     if "gasFan" in changes or "eleFan" in changes:
-                        # Both map to heat_fan_mode_num shown for HA
-                        self._state["heat_fan_mode_num"] = changes.get("gasFan", changes.get("eleFan"))
+                        # Furnace modes (3,4) use furnace_fan_mode_num, electric heat uses heat_fan_mode_num
+                        if mode in (3, 4):
+                            self._state["furnace_fan_mode_num"] = changes.get("gasFan")
+                        else:
+                            self._state["heat_fan_mode_num"] = changes.get("eleFan")
                     if "autoFan" in changes:
                         self._state["auto_fan_mode_num"] = changes["autoFan"]
 
@@ -932,12 +940,10 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                 changes["coolFan"] = fan_value
             elif self.hvac_mode == HVACMode.HEAT:
                 # For heat mode, we need to use the correct fan field based on the specific heat mode
-                mode_num = self._state.get("mode_num", 5)
+                mode_num = self._state.get("mode_num", 4)
                 if mode_num in (3, 4):
-                    # Furnace Modes (3,4): Sets gasFan
                     changes["gasFan"] = fan_value
                 else:
-                    # Electric Heat Modes (5,7,12): Sets eleFan
                     changes["eleFan"] = fan_value
             elif self.hvac_mode == HVACMode.AUTO:
                 # Auto Modes (8,9,10,11): Sets autoFan
@@ -952,7 +958,11 @@ class MicroAirEasyTouchClimate(ClimateEntity):
                     if self.hvac_mode == HVACMode.COOL:
                         self._state["cool_fan_mode_num"] = fan_value
                     elif self.hvac_mode == HVACMode.HEAT:
-                        self._state["heat_fan_mode_num"] = fan_value
+                        mode_num = self._state.get("mode_num", 4)
+                        if mode_num in (3, 4):
+                            self._state["furnace_fan_mode_num"] = fan_value
+                        else:
+                            self._state["heat_fan_mode_num"] = fan_value
                     elif self.hvac_mode == HVACMode.AUTO:
                         self._state["auto_fan_mode_num"] = fan_value
                     self.async_write_ha_state()
@@ -975,8 +985,8 @@ class MicroAirEasyTouchClimate(ClimateEntity):
             "active_state_num",
             "heat_source",
             "on",
-            "off",
             "facePlateTemperature",
+            "raw_z_sts",
         ):
             if k in self._state:
                 attrs[k] = self._state[k]

@@ -356,11 +356,10 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             try:
                 zone_num = int(zone_key)
                 info = status["Z_sts"][zone_key]
-
-                # Only add to available_zones after validation passes
                 available_zones.append(zone_num)
 
                 zone_status = {}
+                zone_status['raw_z_sts'] = info  # Store raw info for debugging
                 zone_status["autoHeat_sp"] = info[0]  # Auto mode heat setpoint
                 zone_status["autoCool_sp"] = info[1]  # Auto mode cool setpoint
                 zone_status["cool_sp"] = info[2]  # Cool mode setpoint
@@ -431,11 +430,6 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
 
         # Apply parsed state as authoritative and notify subscribers
         try:
-            _LOGGER.debug(
-                "Applying parsed device state (zones=%d)",
-                len(hr_status.get("zones", {})),
-            )
-            # Preserve zone configuration data when updating state from polls
             preserved_zone_configs = self._device_state.get("zone_configs", {})
             self._device_state = hr_status
             if preserved_zone_configs:
