@@ -15,6 +15,7 @@ from bleak.exc import BleakError
 from bleak_retry_connector import (
     BleakClientWithServiceCache,
     establish_connection,
+    retry_bluetooth_connection_error,
 )
 from bluetooth_data_tools import short_address
 from bluetooth_sensor_state_data import BluetoothData
@@ -24,7 +25,6 @@ from sensor_state_data.enum import StrEnum
 
 # Local imports for constants and domain-specific functionality
 from ..const import DOMAIN
-from .ble_session import BROKER_KEY, BleSessionBroker
 from .const import (
     UUIDS,
     FAN_MODES_FAN_ONLY,
@@ -132,23 +132,13 @@ class MicroAirEasyTouchSensor(StrEnum):
     DRY_SP = "dry_sp"
 
 
-class _MicroAirSessionAdapter:
-    """Adapt the parser to the same task-owned BLE broker used by diesel heaters."""
-
-    def __init__(self, parser, hass, device):
-        self.parser, self.hass, self.device = parser, hass, device
-        self._logger = _LOGGER
-
-    async def _ensure_connected(self):
-        self.parser._ble_device = self.device
-        if not await self.parser._ensure_connected(self.hass, self.device):
-            raise BleakError("MicroAir session could not connect and authenticate")
-
-    async def _cleanup_connection(self):
-        await self.parser._disconnect_safely()
-
-    async def _finish_ble_session(self):
-        pass
+def client_operation(method):
+    """Use the parser's own reentrant client lock, never a global BLE queue."""
+    @wraps(method)
+    async def wrapped(self, *args, **kwargs):
+        async with self._client_operation():
+            return await method(self, *args, **kwargs)
+    return wrapped
 
 
 class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
@@ -180,11 +170,8 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         self._stored_address: str | None = None
 
         # Synchronization for multi-zone safety, Prevents concurrent connection modifications
-        self._ble_adapter = None
-        self._ble_broker = None
-        self._session_tasks = set()
-        self._session_hass = None
-        self._shutting_down = False
+        self._client_lock = asyncio.Lock()
+        self._client_lock_owner = None
         self._command_queue = asyncio.Queue()  # FIFO command execution
         self._queue_worker_task = None  # Manages queue processing
         self._connected = False  # Tracks persistent connection state
@@ -202,31 +189,17 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         self._poll_in_progress = False  # Prevent poll/command conflicts
 
     @asynccontextmanager
-    async def _ble_session(self, hass, ble_device, *, poll=False):
-        """Connect/read-or-write/disconnect as one globally serialized operation."""
-        if self._shutting_down:
-            raise BleakError("MicroAir parser is shutting down")
-        if self._ble_adapter is None:
-            self._ble_broker = hass.data.setdefault(BROKER_KEY, BleSessionBroker())
-            self._ble_adapter = _MicroAirSessionAdapter(self, hass, ble_device)
-            self._session_hass = hass
-        elif self._session_hass is not hass:
-            raise RuntimeError("A MicroAir parser cannot span Home Assistant instances")
-        self._ble_adapter.device = ble_device
+    async def _client_operation(self):
         task = asyncio.current_task()
-        outer = task not in self._session_tasks
-        self._session_tasks.add(task)
-        try:
-            async with self._ble_broker.session(self._ble_adapter, poll=poll):
-                yield self._client
-        finally:
-            if outer:
-                self._session_tasks.discard(task)
-
-    def _require_ble_session(self):
-        """Reject any internal hardware path accidentally called outside its lease."""
-        if self._ble_broker is None or not self._ble_broker.owned_by(self._ble_adapter):
-            raise RuntimeError("MicroAir hardware access requires the shared BLE lease")
+        if self._client_lock_owner is task:
+            yield
+            return
+        async with self._client_lock:
+            self._client_lock_owner = task
+            try:
+                yield
+            finally:
+                self._client_lock_owner = None
 
     def _get_operation_delay(self, hass, address: str, operation: str) -> float:
         """Calculate delay for specific operations from persistent storage."""
@@ -495,24 +468,31 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
 
         return hr_status
 
+    @retry_bluetooth_connection_error(attempts=7)
+    @client_operation
     async def _connect_to_device(self, ble_device: BLEDevice):
-        """Connect once within the shared transaction's overall deadline."""
-        self._require_ble_session()
-        if self._client is not None:
-            await self._disconnect_safely()
-        self._client = await establish_connection(
-            BleakClientWithServiceCache, ble_device, ble_device.address,
-            max_attempts=1, timeout=15.0,
-        )
-        if not self._client.services:
-            raise BleakError("MicroAir connection has no services")
-        return self._client
-
+        """Connect to the device with retries."""
+        try:
+            self._client = await establish_connection(
+                BleakClientWithServiceCache,
+                ble_device,
+                ble_device.address,
+                timeout=20.0,
+            )
+            if not self._client.services:
+                await asyncio.sleep(2)
+            if not self._client.services:
+                _LOGGER.error("No services available after connecting")
+                return False
+            return self._client
+        except (BleakError, asyncio.TimeoutError, OSError) as e:
+            _LOGGER.error("Connection error: %s", str(e))
+            raise
 
     @retry_authentication(retries=3, delay=2)
+    @client_operation
     async def authenticate(self, password: str) -> bool:
         """Authenticate with the device using the provided password."""
-        self._require_ble_session()
         try:
             if not self._client or not self._client.is_connected:
                 await asyncio.sleep(1)
@@ -541,7 +521,6 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         self, hass, uuid: str, data: bytes, ble_device: BLEDevice, retries: int = 3, request=None
     ) -> bool:
         """Write GATT characteristic with retry and adaptive delay."""
-        self._require_ble_session()
         last_error = None
         for attempt in range(retries):
             try:
@@ -551,10 +530,9 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 write_delay = self._get_operation_delay(hass, ble_device.address, "write")
                 if write_delay > 0:
                     await asyncio.sleep(write_delay)
-                if request is not None and not request["committed"]:
+                if request is not None and not request.get("committed", False):
                     if request["result_future"].done():
                         return False
-                    # No await between checking expiry and submitting the write.
                     request["committed"] = True
                 await self._client.write_gatt_char(uuid, data, response=True)
                 self._adjust_operation_delay(hass, ble_device.address, "write")
@@ -573,9 +551,9 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         _LOGGER.error("GATT write failed after %d attempts: %s", retries, str(last_error))
         return False
 
+    @client_operation
     async def _reconnect_and_authenticate(self, hass, ble_device: BLEDevice) -> bool:
         """Reconnect and re-authenticate with adaptive delays."""
-        self._require_ble_session()
         try:
             await self._disconnect_safely()
             connect_delay = self._get_operation_delay(hass, ble_device.address, "connect")
@@ -604,7 +582,6 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         self, hass, characteristic, ble_device: BLEDevice, retries: int = 3
     ) -> bytes | None:
         """Read GATT characteristic with retry and operation-specific delay."""
-        self._require_ble_session()
         last_error = None
         for attempt in range(retries):
             try:
@@ -631,277 +608,440 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         _LOGGER.error("GATT read failed after %d attempts: %s", retries, str(last_error))
         return None
 
+    @client_operation
     async def reboot_device(self, hass, ble_device: BLEDevice) -> bool:
-        """Send the existing reset command in a bounded shared BLE transaction."""
+        """Reboot the device by sending reset command."""
         try:
-            async with self._ble_session(hass, ble_device):
-                write_delay = self._get_operation_delay(hass, ble_device.address, "write")
-                if write_delay > 0:
-                    await asyncio.sleep(write_delay)
-                reset_cmd = {"Type": "Change", "Changes": {"zone": 0, "reset": " OK"}}
-                cmd_bytes = json.dumps(reset_cmd).encode()
-                try:
-                    await self._client.write_gatt_char(UUIDS["jsonCmd"], cmd_bytes, response=True)
-                    _LOGGER.info("Reboot command sent successfully")
+            self._ble_device = ble_device
+            self._client = await self._connect_to_device(ble_device)
+            if not self._client or not self._client.is_connected:
+                _LOGGER.error("Failed to connect for reboot")
+                return False
+            if not await self.authenticate(self._password):
+                _LOGGER.error("Failed to authenticate for reboot")
+                return False
+            write_delay = self._get_operation_delay(hass, ble_device.address, "write")
+            if write_delay > 0:
+                await asyncio.sleep(write_delay)
+            reset_cmd = {"Type": "Change", "Changes": {"zone": 0, "reset": " OK"}}
+            cmd_bytes = json.dumps(reset_cmd).encode()
+            try:
+                await self._client.write_gatt_char(UUIDS["jsonCmd"], cmd_bytes, response=True)
+                _LOGGER.info("Reboot command sent successfully")
+                return True
+            except BleakError as e:
+                if "Error" in str(e) and "133" in str(e):
+                    _LOGGER.info("Device is rebooting as expected")
                     return True
-                except BleakError as e:
-                    if "Error" in str(e) and "133" in str(e):
-                        _LOGGER.info("Device is rebooting as expected")
-                        return True
-                    _LOGGER.error("Failed to send reboot command: %s", str(e))
-                    self._increase_operation_delay(hass, ble_device.address, "write")
-                    return False
-
-        except (BleakError, asyncio.TimeoutError, OSError, AttributeError, json.JSONDecodeError) as err:
-            _LOGGER.error("Error during reboot: %s", err)
+                _LOGGER.error("Failed to send reboot command: %s", str(e))
+                self._increase_operation_delay(hass, ble_device.address, "write")
+                return False
+        except (
+            BleakError,
+            asyncio.TimeoutError,
+            OSError,
+            AttributeError,
+            json.JSONDecodeError,
+        ) as e:
+            _LOGGER.error("Error during reboot: %s", str(e))
             return False
+        finally:
+            try:
+                if self._client and self._client.is_connected:
+                    await self._client.disconnect()
+            except (BleakError, OSError):
+                _LOGGER.debug("Error disconnecting after reboot")
+            self._client = None
+            self._ble_device = None
 
-
+    @client_operation
     async def get_available_zones(self, hass, ble_device: BLEDevice) -> list[int]:
-        """Probe zones without opening an untracked temporary BLE client."""
-        ble_device = ble_device or self._ble_device
+        """Get available zones by performing a robust GATT probe.
+
+        Use multiple probe attempts with proper timing to ensure zone detection
+        works reliably during device setup. Addresses intermittent issues where
+        only the first zone is detected on initial installation.
+        """
         if ble_device is None:
-            return [0]
+            ble_device = self._ble_device
+            if ble_device is None:
+                _LOGGER.warning("No BLE device available to detect zones; defaulting to [0]")
+                return [0]
+
+        _LOGGER.debug(
+            "Probing device %s for available zones",
+            ble_device.address,
+        )
+
+        # Try multiple probe attempts to handle timing variability
         for attempt in range(3):
+            client = None
             try:
-                async with self._ble_session(hass, ble_device, poll=True) as client:
-                    # Try different zone query approaches
-                    probe_commands = [
-                        # First try: Request all zone data (no specific zone)
-                        {"Type": "Get Status", "EM": self._email, "TM": int(time.time())},
-                        # Second try: Request zone 0 data (traditional approach)
-                        {
-                            "Type": "Get Status",
-                            "Zone": 0,
-                            "EM": self._email,
-                            "TM": int(time.time()),
-                        },
-                    ]
-
-                    for cmd_index, cmd in enumerate(probe_commands):
-                        try:
-                            _LOGGER.debug(
-                                "Zone probe command %d/%d (attempt %d): %s",
-                                cmd_index + 1,
-                                len(probe_commands),
-                                attempt + 1,
-                                cmd,
-                            )
-                            await client.write_gatt_char(
-                                UUIDS["jsonCmd"],
-                                json.dumps(cmd).encode("utf-8"),
-                                response=True,
-                            )
-                            # Give device more time to respond with complete data
-                            await asyncio.sleep(0.5)
-
-                            payload = await client.read_gatt_char(UUIDS["jsonReturn"])
-                            if payload:
-                                preview, full_b64 = _format_payload_for_log(payload)
-                                _LOGGER.debug(
-                                    "Zone probe response (attempt %d, cmd %d): %s (len=%d)",
-                                    attempt + 1,
-                                    cmd_index + 1,
-                                    preview,
-                                    len(payload),
-                                )
-
-                                decrypted = self.decrypt(payload)
-                                zones = decrypted.get("available_zones", [0])
-                                _LOGGER.debug(
-                                    "Zone probe found zones (attempt %d, cmd %d): %s",
-                                    attempt + 1,
-                                    cmd_index + 1,
-                                    zones,
-                                )
-
-                                # Fetch configuration data for detected zones
-                                if zones and len(zones) > 0:
-                                    await self._fetch_zone_configurations(client, zones)
-
-                                # If we found multiple zones, we're done
-                                if len(zones) > 1:
-                                    _LOGGER.info(
-                                        "Zone probe successful: detected %d zones: %s (attempt %d)",
-                                        len(zones),
-                                        zones,
-                                        attempt + 1,
-                                    )
-                                    return zones
-                                # If we found at least one zone and this is the last command, use it
-                                elif zones and cmd_index == len(probe_commands) - 1:
-                                    _LOGGER.info(
-                                        "Zone probe completed: found %d zone(s): %s (attempt %d)",
-                                        len(zones),
-                                        zones,
-                                        attempt + 1,
-                                    )
-                                    return zones
-
-                            else:
-                                _LOGGER.debug(
-                                    "No payload received for command %d (attempt %d)",
-                                    cmd_index + 1,
-                                    attempt + 1,
-                                )
-
-                        except (
-                            BleakError,
-                            asyncio.TimeoutError,
-                            OSError,
-                            json.JSONDecodeError,
-                        ) as e:
-                            _LOGGER.debug(
-                                "Zone probe command %d failed (attempt %d): %s",
-                                cmd_index + 1,
-                                attempt + 1,
-                                str(e),
-                            )
-                            continue
-
-
-            except (BleakError, asyncio.TimeoutError, OSError) as err:
-                _LOGGER.debug("Zone probe attempt %d failed: %s", attempt + 1, err)
-            if attempt < 2:
-                await asyncio.sleep(1)
-        _LOGGER.warning("All zone detection attempts failed; retaining known zones")
-        return self._device_state.get("available_zones", [0])
-
-
-    async def _fetch_zone_configurations(self, client_or_device, zones: list[int]) -> None:
-        """Read capabilities using the current lease, or acquire one for a device."""
-        if not hasattr(client_or_device, "write_gatt_char"):
-            if self._session_hass is None:
-                raise RuntimeError("Config fetch needs a Home Assistant-bound session")
-            async with self._ble_session(self._session_hass, client_or_device, poll=True):
-                await self._fetch_zone_configurations(self._client, zones)
-            return
-        self._require_ble_session()
-        client = client_or_device
-        for zone in zones:
-            try:
-                # Send Get Config request for this zone
-                config_cmd = {"Type": "Get Config", "Zone": zone}
-                _LOGGER.debug("Requesting config for zone %d: %s", zone, config_cmd)
-
-                await client.write_gatt_char(
-                    UUIDS["jsonCmd"],
-                    json.dumps(config_cmd).encode("utf-8"),
-                    response=True,
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.address,
+                    timeout=15.0,
                 )
-                await asyncio.sleep(1)  # Allow device time to prepare response
-                payload = await client.read_gatt_char(UUIDS["jsonReturn"])
-                if payload:
+                if not client or not client.is_connected:
+                    _LOGGER.warning(
+                        "Zone probe attempt %d failed to connect to %s",
+                        attempt + 1,
+                        ble_device.address,
+                    )
+                    continue
+
+                # Perform authentication with longer delay for processing
+                if self._password:
                     try:
-                        response = json.loads(payload.decode("utf-8"))
-                        if response.get("Type") == "Response" and response.get("RT") == "Config":
-                            cfg_str = response.get("CFG", "{}")
-                            cfg_data = json.loads(cfg_str) if isinstance(cfg_str, str) else cfg_str
-
-                            # Store configuration data for this zone
-                            if "zone_configs" not in self._device_state:
-                                self._device_state["zone_configs"] = {}
-
-                            self._device_state["zone_configs"][zone] = {
-                                # Mode available bitmask
-                                "MAV": cfg_data.get("MAV", 0),
-                                # Fan array (16 elements)
-                                "FA": cfg_data.get("FA", [0] * 16),
-                                # Setpoint limits array (4 elements)
-                                "SPL": cfg_data.get("SPL", [60, 85, 50, 85]),
-                                # Mode array (currently unused)
-                                "MA": cfg_data.get("MA", [0] * 16),
-                            }
-
-                            _LOGGER.debug(
-                                "Zone %d config: MAV=%d, FA=%s, SPL=%s",
-                                zone,
-                                cfg_data.get("MAV", 0),
-                                cfg_data.get("FA", []),
-                                cfg_data.get("SPL", []),
-                            )
-                        else:
-                            _LOGGER.debug(
-                                "Unexpected config response for zone %d: %s",
-                                zone,
-                                response,
-                            )
-                    except (json.JSONDecodeError, KeyError) as e:
+                        password_bytes = self._password.encode("utf-8")
+                        await client.write_gatt_char(UUIDS["passwordCmd"], password_bytes, response=True)
+                        # Allow more time for authentication to be processed
+                        await asyncio.sleep(0.8)
+                        _LOGGER.debug("Zone probe authentication sent (attempt %d)", attempt + 1)
+                    except (
+                        BleakError,
+                        asyncio.TimeoutError,
+                        OSError,
+                        AttributeError,
+                    ) as e:
                         _LOGGER.debug(
-                            "Failed to parse config response for zone %d: %s",
-                            zone,
+                            "Zone probe authentication failed (attempt %d): %s",
+                            attempt + 1,
                             str(e),
                         )
-                else:
-                    _LOGGER.debug("No config response received for zone %d", zone)
 
-            except (
-                BleakError,
-                asyncio.TimeoutError,
-                OSError,
-                json.JSONDecodeError,
-            ) as e:
-                _LOGGER.debug("Error fetching config for zone %d: %s", zone, str(e))
-                continue
+                # Try different zone query approaches
+                probe_commands = [
+                    # First try: Request all zone data (no specific zone)
+                    {"Type": "Get Status", "EM": self._email, "TM": int(time.time())},
+                    # Second try: Request zone 0 data (traditional approach)
+                    {
+                        "Type": "Get Status",
+                        "Zone": 0,
+                        "EM": self._email,
+                        "TM": int(time.time()),
+                    },
+                ]
 
+                for cmd_index, cmd in enumerate(probe_commands):
+                    try:
+                        _LOGGER.debug(
+                            "Zone probe command %d/%d (attempt %d): %s",
+                            cmd_index + 1,
+                            len(probe_commands),
+                            attempt + 1,
+                            cmd,
+                        )
+                        await client.write_gatt_char(
+                            UUIDS["jsonCmd"],
+                            json.dumps(cmd).encode("utf-8"),
+                            response=True,
+                        )
+                        # Give device more time to respond with complete data
+                        await asyncio.sleep(0.5)
 
-    async def _refetch_zone_configurations(self, hass, ble_device: BLEDevice, zones: list[int]) -> None:
-        """Load runtime capabilities without an independent temporary connection."""
+                        payload = await client.read_gatt_char(UUIDS["jsonReturn"])
+                        if payload:
+                            preview, full_b64 = _format_payload_for_log(payload)
+                            _LOGGER.debug(
+                                "Zone probe response (attempt %d, cmd %d): %s (len=%d)",
+                                attempt + 1,
+                                cmd_index + 1,
+                                preview,
+                                len(payload),
+                            )
+
+                            decrypted = self.decrypt(payload)
+                            zones = decrypted.get("available_zones", [0])
+                            _LOGGER.debug(
+                                "Zone probe found zones (attempt %d, cmd %d): %s",
+                                attempt + 1,
+                                cmd_index + 1,
+                                zones,
+                            )
+
+                            # Fetch configuration data for detected zones
+                            if zones and len(zones) > 0:
+                                await self._fetch_zone_configurations(client, zones)
+
+                            # If we found multiple zones, we're done
+                            if len(zones) > 1:
+                                _LOGGER.info(
+                                    "Zone probe successful: detected %d zones: %s (attempt %d)",
+                                    len(zones),
+                                    zones,
+                                    attempt + 1,
+                                )
+                                return zones
+                            # If we found at least one zone and this is the last command, use it
+                            elif zones and cmd_index == len(probe_commands) - 1:
+                                _LOGGER.info(
+                                    "Zone probe completed: found %d zone(s): %s (attempt %d)",
+                                    len(zones),
+                                    zones,
+                                    attempt + 1,
+                                )
+                                return zones
+
+                        else:
+                            _LOGGER.debug(
+                                "No payload received for command %d (attempt %d)",
+                                cmd_index + 1,
+                                attempt + 1,
+                            )
+
+                    except (
+                        BleakError,
+                        asyncio.TimeoutError,
+                        OSError,
+                        json.JSONDecodeError,
+                    ) as e:
+                        _LOGGER.debug(
+                            "Zone probe command %d failed (attempt %d): %s",
+                            cmd_index + 1,
+                            attempt + 1,
+                            str(e),
+                        )
+                        continue
+
+            except (BleakError, asyncio.TimeoutError, OSError) as e:
+                _LOGGER.debug(
+                    "Zone probe attempt %d failed for %s: %s",
+                    attempt + 1,
+                    ble_device.address,
+                    str(e),
+                )
+            finally:
+                try:
+                    if client and client.is_connected:
+                        await client.disconnect()
+                except (BleakError, OSError):
+                    pass
+
+            # Wait between attempts to let device settle
+            if attempt < 2:  # Don't wait after the last attempt
+                await asyncio.sleep(1.0)
+
+        # All attempts failed, fallback to single zone
+        _LOGGER.warning(
+            "All zone detection attempts failed for %s, defaulting to single zone",
+            ble_device.address,
+        )
+        return [0]
+
+    @client_operation
+    async def _fetch_zone_configurations(self, client_or_device, zones: list[int]) -> None:
+        """Fetch configuration data (MAV, FA, SPL) for detected zones.
+
+        This retrieves the device capabilities that determine which modes and fan speeds
+        are available for each zone, enabling proper UI filtering.
+        """
+        _LOGGER.debug("Fetching configuration data for zones: %s", zones)
+
+        # Handle both client objects and BLEDevice objects
+        client = None
+        is_temp_client = False
+
         try:
-            async with self._ble_session(hass, ble_device, poll=True) as client:
-                await self._fetch_zone_configurations(client, zones)
-            _LOGGER.info("Runtime zone configuration fetched through shared BLE queue: %s", zones)
+            # If it's already a client, use it directly
+            if hasattr(client_or_device, "write_gatt_char"):
+                client = client_or_device
+                _LOGGER.debug("Using existing client for config fetch")
+            else:
+                # It's a BLEDevice, create a temporary connection
+                from bleak_retry_connector import (
+                    BleakClientWithServiceCache,
+                    establish_connection,
+                )
+
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    client_or_device,
+                    client_or_device.address,
+                    timeout=10.0,
+                )
+                if not client or not client.is_connected:
+                    _LOGGER.warning("Failed to connect for config fetch")
+                    return
+
+                # Authenticate
+                if self._password:
+                    try:
+                        password_bytes = self._password.encode("utf-8")
+                        await client.write_gatt_char(UUIDS["passwordCmd"], password_bytes, response=True)
+                        await asyncio.sleep(0.3)
+                    except (
+                        BleakError,
+                        asyncio.TimeoutError,
+                        OSError,
+                        AttributeError,
+                    ) as e:
+                        _LOGGER.debug("Auth failed during config fetch: %s", str(e))
+                        return
+                is_temp_client = True
+
+            for zone in zones:
+                try:
+                    # Send Get Config request for this zone
+                    config_cmd = {"Type": "Get Config", "Zone": zone}
+                    _LOGGER.debug("Requesting config for zone %d: %s", zone, config_cmd)
+
+                    await client.write_gatt_char(
+                        UUIDS["jsonCmd"],
+                        json.dumps(config_cmd).encode("utf-8"),
+                        response=True,
+                    )
+                    await asyncio.sleep(1)  # Allow device time to prepare response
+                    payload = await client.read_gatt_char(UUIDS["jsonReturn"])
+                    if payload:
+                        try:
+                            response = json.loads(payload.decode("utf-8"))
+                            if response.get("Type") == "Response" and response.get("RT") == "Config":
+                                cfg_str = response.get("CFG", "{}")
+                                cfg_data = json.loads(cfg_str) if isinstance(cfg_str, str) else cfg_str
+
+                                # Store configuration data for this zone
+                                if "zone_configs" not in self._device_state:
+                                    self._device_state["zone_configs"] = {}
+
+                                self._device_state["zone_configs"][zone] = {
+                                    # Mode available bitmask
+                                    "MAV": cfg_data.get("MAV", 0),
+                                    # Fan array (16 elements)
+                                    "FA": cfg_data.get("FA", [0] * 16),
+                                    # Setpoint limits array (4 elements)
+                                    "SPL": cfg_data.get("SPL", [60, 85, 50, 85]),
+                                    # Mode array (currently unused)
+                                    "MA": cfg_data.get("MA", [0] * 16),
+                                }
+
+                                _LOGGER.debug(
+                                    "Zone %d config: MAV=%d, FA=%s, SPL=%s",
+                                    zone,
+                                    cfg_data.get("MAV", 0),
+                                    cfg_data.get("FA", []),
+                                    cfg_data.get("SPL", []),
+                                )
+                            else:
+                                _LOGGER.debug(
+                                    "Unexpected config response for zone %d: %s",
+                                    zone,
+                                    response,
+                                )
+                        except (json.JSONDecodeError, KeyError) as e:
+                            _LOGGER.debug(
+                                "Failed to parse config response for zone %d: %s",
+                                zone,
+                                str(e),
+                            )
+                    else:
+                        _LOGGER.debug("No config response received for zone %d", zone)
+
+                except (
+                    BleakError,
+                    asyncio.TimeoutError,
+                    OSError,
+                    json.JSONDecodeError,
+                ) as e:
+                    _LOGGER.debug("Error fetching config for zone %d: %s", zone, str(e))
+                    continue
+
+        finally:
+            # Clean up temporary client if we created one
+            if is_temp_client and client and client.is_connected:
+                try:
+                    await client.disconnect()
+                except (BleakError, OSError):
+                    pass
+
+        _LOGGER.debug(
+            "Configuration fetch complete. Stored configs for zones: %s",
+            list(self._device_state.get("zone_configs", {}).keys()),
+        )
+
+    @client_operation
+    async def _refetch_zone_configurations(self, hass, ble_device: BLEDevice, zones: list[int]) -> None:
+        """Read runtime capabilities through the parser's persistent client."""
+        try:
+            if await self._ensure_connected(hass, ble_device):
+                await self._fetch_zone_configurations(self._client, zones)
         except (BleakError, asyncio.TimeoutError, OSError, json.JSONDecodeError) as err:
             _LOGGER.warning("Error re-fetching zone configurations: %s", err)
 
-
     async def _process_command_queue(self, hass, ble_device: BLEDevice) -> None:
-        """Preserve command order; discard expired requests before their first write."""
+        """Process commands from the queue serially to prevent device conflicts.
+
+        This worker ensures all commands are executed in FIFO order with proper
+        connection management and error handling.
+        """
+        _LOGGER.debug("Command queue worker started")
         try:
             while True:
-                item = await self._command_queue.get()
-                future = item["result_future"]
-                execution = None
-                def cancel_uncommitted(done, request=item):
-                    task = request.get("execution_task")
-                    if done.cancelled() and not request["committed"] and task is not None:
-                        task.cancel()
                 try:
-                    if future.done():
-                        continue
-                    current = self.get_ble_device(hass) or ble_device
-                    if current is None:
-                        future.set_result(False)
-                        continue
-                    execution = asyncio.create_task(self._execute_command_safely(hass, current, item["command"], request=item))
-                    item["execution_task"] = execution
-                    future.add_done_callback(cancel_uncommitted)
-                    try:
-                        result = await execution
-                    except asyncio.CancelledError:
-                        if asyncio.current_task().cancelling():
-                            raise
-                        result = False  # Caller expired before a setting was submitted.
-                    if not future.done():
-                        future.set_result(result)
-                except (BleakError, OSError, TimeoutError, json.JSONDecodeError) as err:
-                    _LOGGER.error("Error in command queue worker: %s", err)
-                    if not future.done():
-                        future.set_result(False)
-                finally:
-                    future.remove_done_callback(cancel_uncommitted)
-                    item.pop("execution_task", None)
-                    if not future.done():
-                        future.set_result(False)
-                    self._command_queue.task_done()
-                await asyncio.sleep(0.1)
-        finally:
-            while not self._command_queue.empty():
-                item = self._command_queue.get_nowait()
-                if not item["result_future"].done():
-                    item["result_future"].set_result(False)
-                self._command_queue.task_done()
+                    # Wait for next command with timeout
+                    command_item = await asyncio.wait_for(self._command_queue.get(), timeout=60.0)
 
+                    if command_item["result_future"].done():
+                        self._command_queue.task_done()
+                        continue
+
+                    # Get the best available BLE device
+                    current_ble_device = self.get_ble_device(hass)
+                    if not current_ble_device:
+                        # Try the originally provided device as fallback
+                        current_ble_device = ble_device
+
+                    if not current_ble_device:
+                        _LOGGER.error("No BLE device available for command execution")
+                        if not command_item["result_future"].done():
+                            command_item["result_future"].set_result(False)
+                        self._command_queue.task_done()
+                        continue
+
+                    # Execute command with connection management
+                    result = await self._execute_command_safely(hass, current_ble_device, command_item["command"], request=command_item)
+
+                    # Return result to caller
+                    if not command_item["result_future"].done():
+                        command_item["result_future"].set_result(result)
+
+                    # Mark queue task as done
+                    self._command_queue.task_done()
+
+                    # Small delay between commands to prevent overwhelming device
+                    await asyncio.sleep(0.1)
+
+                except asyncio.TimeoutError:
+                    # No commands for 60 seconds, check if we should keep connection alive
+                    async with self._client_operation():
+                        if time.time() - self._last_activity_time > self._connection_idle_timeout:
+                            await self._disconnect_safely()
+                    continue
+                except (BleakError, OSError, json.JSONDecodeError) as e:
+                    _LOGGER.error("Error in command queue worker: %s", str(e))
+                    # Try to set error on pending command if available
+                    try:
+                        if not command_item["result_future"].done():
+                            command_item["result_future"].set_result(False)
+                        self._command_queue.task_done()
+                    except (KeyError, AttributeError):
+                        pass
+                    await asyncio.sleep(1.0)  # Brief recovery delay
+        except asyncio.CancelledError:
+            _LOGGER.debug("Command queue worker cancelled")
+            # Clean up any remaining commands
+            while not self._command_queue.empty():
+                try:
+                    item = self._command_queue.get_nowait()
+                    if not item["result_future"].done():
+                        item["result_future"].set_result(False)
+                    self._command_queue.task_done()
+                except (KeyError, AttributeError):
+                    break
+            raise
+        finally:
+            await self._disconnect_safely()
 
     async def _execute_command_safely(self, hass, ble_device: BLEDevice, command: dict, request=None) -> bool:
         """Execute a single command with proper connection and error handling.
@@ -909,9 +1049,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         Automatically reads status response after commands to provide immediate
         UI feedback while maintaining thread-safe execution.
         """
-        if request is not None and request["result_future"].done():
-            return False
-        async with self._ble_session(hass, ble_device):
+        async with self._client_operation():
             try:
                 if request is not None and request["result_future"].done():
                     return False
@@ -919,6 +1057,8 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 if not await self._ensure_connected(hass, ble_device):
                     return False
 
+                if request is not None and request["result_future"].done():
+                    return False
                 # Send command
                 command_bytes = json.dumps(command).encode()
                 _LOGGER.debug("Sending command: %s", command)
@@ -999,9 +1139,9 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 await self._disconnect_safely()
                 return False
 
+    @client_operation
     async def _ensure_connected(self, hass, ble_device: BLEDevice) -> bool:
         """Ensure we have a valid, authenticated connection."""
-        self._require_ble_session()
         try:
             # Check if current connection is valid
             if self._client and self._client.is_connected:
@@ -1013,7 +1153,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                     await self._disconnect_safely()
 
             # Need to establish new connection
-            _LOGGER.debug("Establishing short shared BLE session")
+            _LOGGER.debug("Establishing new persistent connection")
 
             connect_delay = self._get_operation_delay(hass, ble_device.address, "connect")
             if connect_delay > 0:
@@ -1040,8 +1180,10 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             self._connected = True
             self._last_activity_time = time.time()
 
+            # Start health monitoring
+            await self._start_connection_health_monitor(hass, ble_device)
 
-            _LOGGER.debug("Shared BLE session authenticated")
+            _LOGGER.debug("Persistent connection established successfully")
             return True
 
         except (BleakError, asyncio.TimeoutError, OSError, AttributeError) as e:
@@ -1075,8 +1217,9 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         )
         return None
 
+    @client_operation
     async def _disconnect_safely(self) -> None:
-        """Bound cleanup; retain unconfirmed clients for broker quarantine/retry."""
+        """Bound explicit cleanup and retain any unconfirmed client reference."""
         client = self._client
         if client is None:
             return
@@ -1089,19 +1232,56 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             if client.is_connected:
                 raise
         self._client = None
-        self._connected = False  # Transport state only; keep all cached zone values.
-
+        self._connected = False
 
     async def _start_connection_health_monitor(self, hass, ble_device: BLEDevice) -> None:
-        """No persistent connection exists to monitor in shared-session mode."""
-        return
+        """Start background health monitoring for the persistent connection."""
+        if self._connection_health_check_task and not self._connection_health_check_task.done():
+            return  # Already running
 
+        async def _health_check_loop():
+            while True:
+                try:
+                    await asyncio.sleep(self._health_check_interval)
+
+                    async with self._client_operation():
+                        # Check if connection has been idle too long
+                        time_since_activity = time.time() - self._last_activity_time
+                        if time_since_activity > self._connection_idle_timeout:
+                            _LOGGER.debug(
+                                "Connection idle for %.1fs, disconnecting to save resources",
+                                time_since_activity,
+                            )
+                            await self._disconnect_safely()
+                            continue
+
+                        # If we have an active connection, verify it's still working
+                        if self._client and self._client.is_connected:
+                            try:
+                                # Simple health check - verify services are still available
+                                if not self._client.services:
+                                    _LOGGER.debug("Connection health check failed - no services, reconnecting")
+                                    await self._disconnect_safely()
+                            except (BleakError, OSError) as e:
+                                _LOGGER.debug(
+                                    "Connection health check failed: %s, reconnecting",
+                                    str(e),
+                                )
+                                await self._disconnect_safely()
+
+                except asyncio.CancelledError:
+                    _LOGGER.debug("Connection health monitor cancelled")
+                    break
+                except (BleakError, asyncio.TimeoutError, OSError) as e:
+                    _LOGGER.debug("Error in connection health monitor: %s", str(e))
+                    await asyncio.sleep(30)  # Wait before retrying
+
+        self._connection_health_check_task = asyncio.create_task(_health_check_loop())
 
     async def async_shutdown(self) -> None:
         """Clean shutdown of all tasks and connections."""
         _LOGGER.debug("Shutting down MicroAirEasyTouch device data")
 
-        self._shutting_down = True
         # Stop polling
         await self.stop_polling()
 
@@ -1121,12 +1301,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             except asyncio.CancelledError:
                 pass
 
-        pending = [task for task in self._session_tasks if task is not asyncio.current_task()]
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        # No lease is active after all tracked operations have finished cleanup.
+        # Clean disconnect
         await self._disconnect_safely()
 
         # Clear any cached BLE device references to avoid stale handles on reload
@@ -1182,48 +1357,110 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         self._poll_task = None
 
     async def _poll_loop(self, hass) -> None:
-        """Read all zones every 30 seconds, releasing the shared BLE slot each time."""
+        """Continuously poll the device for full status and update internal state.
+
+        This polling loop respects the command queue to prevent conflicts and
+        uses the persistent connection when available.
+        """
+        _LOGGER.debug("Poll loop running")
         try:
             while True:
                 try:
-                    current = self.get_ble_device(hass)
-                    if current is None and getattr(self, "_address", None):
-                        current = await self._resolve_ble_device_with_retry(hass, self._address)
-                        if current:
-                            self.set_ble_device(current)
-                    if current is not None:
-                        await self._poll_once(hass, current)
-                    else:
+                    # Skip this poll iteration if commands are being processed
+                    if not self._command_queue.empty():
+                        await asyncio.sleep(self._poll_interval / 4)  # Check again sooner
+                        continue
+
+                    # Mark polling in progress to prevent conflicts
+                    self._poll_in_progress = True
+
+                    # Get the best available BLE device
+                    current_ble_device = self.get_ble_device(hass)
+                    if not current_ble_device and getattr(self, "_address", None):
+                        # Try to resolve by address as fallback
+                        current_ble_device = await self._resolve_ble_device_with_retry(hass, self._address)
+                        if current_ble_device:
+                            self.set_ble_device(current_ble_device)
+
+                    if not current_ble_device:
+                        _LOGGER.debug("No BLE device known, skipping poll iteration")
                         self._last_poll_success = False
-                except (BleakError, TimeoutError, OSError, AttributeError, KeyError, ValueError) as err:
-                    _LOGGER.debug("MicroAir poll failed: %s", err)
+                    else:
+                        # Use the persistent connection for polling if available
+                        async with self._client_operation():
+                            try:
+                                if await self._ensure_connected(hass, current_ble_device):
+                                    # Send status request
+                                    message = {
+                                        "Type": "Get Status",
+                                        "Zone": 0,
+                                        "EM": self._email,
+                                        "TM": int(time.time()),
+                                    }
+                                    command_bytes = json.dumps(message).encode()
+
+                                    if await self._write_gatt_with_retry(
+                                        hass,
+                                        UUIDS["jsonCmd"],
+                                        command_bytes,
+                                        current_ble_device,
+                                    ):
+                                        # Read response
+                                        json_payload = await self._read_gatt_with_retry(
+                                            hass,
+                                            UUIDS["jsonReturn"],
+                                            current_ble_device,
+                                        )
+                                        if json_payload:
+                                            # preview, full_b64 = _format_payload_for_log(json_payload)
+                                            # Pass bytes directly to decrypt (it accepts bytes or str)
+                                            self.decrypt(json_payload)
+                                            self._last_poll_success = True
+                                            self._last_poll_time = time.time()
+                                            self._last_activity_time = time.time()
+                                        else:
+                                            self._last_poll_success = False
+                                    else:
+                                        _LOGGER.debug("Poll send_command failed")
+                                        self._last_poll_success = False
+                                else:
+                                    _LOGGER.debug("Poll failed to establish connection")
+                                    self._last_poll_success = False
+                            except (
+                                BleakError,
+                                asyncio.TimeoutError,
+                                OSError,
+                                json.JSONDecodeError,
+                            ) as e:
+                                _LOGGER.debug("Error during poll execution: %s", str(e))
+                                self._last_poll_success = False
+
+                except (
+                    BleakError,
+                    asyncio.TimeoutError,
+                    OSError,
+                    AttributeError,
+                    KeyError,
+                    ValueError,
+                ) as e:
+                    _LOGGER.debug("Error during poll iteration: %s", str(e))
                     self._last_poll_success = False
+                finally:
+                    self._poll_in_progress = False
+
                 await asyncio.sleep(self._poll_interval)
         except asyncio.CancelledError:
             _LOGGER.info("Poll loop cancelled")
             raise
-
-    async def _poll_once(self, hass, ble_device) -> bool:
-        """A complete authenticated status read, preserving all zone capabilities."""
-        self._last_poll_success = False
-        async with self._ble_session(hass, ble_device, poll=True):
-            message = {"Type": "Get Status", "Zone": 0, "EM": self._email, "TM": int(time.time())}
-            if not await self._write_gatt_with_retry(hass, UUIDS["jsonCmd"], json.dumps(message).encode(), ble_device):
-                return False
-            payload = await self._read_gatt_with_retry(hass, UUIDS["jsonReturn"], ble_device)
-            if not payload:
-                return False
-            parsed = self.decrypt(payload)
-            if not any(parsed.get("zones", {}).values()):
-                return False
-            self._last_poll_success = True
-            self._last_poll_time = self._last_activity_time = time.time()
-        _LOGGER.debug("Shared BLE status read complete for %s (all zones)", ble_device.address)
-        return True
-
+        finally:
+            self._poll_in_progress = False
 
     async def send_command(self, hass, ble_device: BLEDevice, command: dict) -> bool:
-        """Queue a command, reconnect for its transaction, then release BLE."""
+        """Send command to device using persistent connection and command queue.
+
+        This method ensures thread-safe command execution and maintains a
+        persistent connection to prevent device instability from connection thrashing.
+        """
         # Store the BLE device for future use
         if ble_device:
             self.set_ble_device(ble_device)
@@ -1238,7 +1475,6 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             "command": command,
             "result_future": result_future,
             "timestamp": time.time(),
-            "committed": False,
         }
 
         await self._command_queue.put(command_item)
