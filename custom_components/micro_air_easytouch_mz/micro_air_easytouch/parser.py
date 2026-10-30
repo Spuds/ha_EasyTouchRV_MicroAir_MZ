@@ -1,6 +1,7 @@
 # Standard library imports for basic functionality
 from __future__ import annotations
 from functools import wraps
+from contextlib import asynccontextmanager
 import logging
 import asyncio
 import time
@@ -131,6 +132,15 @@ class MicroAirEasyTouchSensor(StrEnum):
     DRY_SP = "dry_sp"
 
 
+def client_operation(method):
+    """Use the parser's own reentrant client lock, never a global BLE queue."""
+    @wraps(method)
+    async def wrapped(self, *args, **kwargs):
+        async with self._client_operation():
+            return await method(self, *args, **kwargs)
+    return wrapped
+
+
 class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
     """Main class for handling MicroAir EasyTouch device data and communication."""
 
@@ -161,6 +171,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
 
         # Synchronization for multi-zone safety, Prevents concurrent connection modifications
         self._client_lock = asyncio.Lock()
+        self._client_lock_owner = None
         self._command_queue = asyncio.Queue()  # FIFO command execution
         self._queue_worker_task = None  # Manages queue processing
         self._connected = False  # Tracks persistent connection state
@@ -176,6 +187,19 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         self._last_poll_success: bool = False
         self._last_poll_time: float | None = None
         self._poll_in_progress = False  # Prevent poll/command conflicts
+
+    @asynccontextmanager
+    async def _client_operation(self):
+        task = asyncio.current_task()
+        if self._client_lock_owner is task:
+            yield
+            return
+        async with self._client_lock:
+            self._client_lock_owner = task
+            try:
+                yield
+            finally:
+                self._client_lock_owner = None
 
     def _get_operation_delay(self, hass, address: str, operation: str) -> float:
         """Calculate delay for specific operations from persistent storage."""
@@ -445,6 +469,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         return hr_status
 
     @retry_bluetooth_connection_error(attempts=7)
+    @client_operation
     async def _connect_to_device(self, ble_device: BLEDevice):
         """Connect to the device with retries."""
         try:
@@ -465,6 +490,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             raise
 
     @retry_authentication(retries=3, delay=2)
+    @client_operation
     async def authenticate(self, password: str) -> bool:
         """Authenticate with the device using the provided password."""
         try:
@@ -488,13 +514,11 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             return True
         except (BleakError, asyncio.TimeoutError, OSError, AttributeError) as e:
             _LOGGER.error("Authentication failed: %s", str(e))
-            if self._client and self._client.is_connected:
-                await self._client.disconnect()
-            self._client = None
+            await self._disconnect_safely()
             return False
 
     async def _write_gatt_with_retry(
-        self, hass, uuid: str, data: bytes, ble_device: BLEDevice, retries: int = 3
+        self, hass, uuid: str, data: bytes, ble_device: BLEDevice, retries: int = 3, request=None
     ) -> bool:
         """Write GATT characteristic with retry and adaptive delay."""
         last_error = None
@@ -506,6 +530,10 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 write_delay = self._get_operation_delay(hass, ble_device.address, "write")
                 if write_delay > 0:
                     await asyncio.sleep(write_delay)
+                if request is not None and not request.get("committed", False):
+                    if request["result_future"].done():
+                        return False
+                    request["committed"] = True
                 await self._client.write_gatt_char(uuid, data, response=True)
                 self._adjust_operation_delay(hass, ble_device.address, "write")
                 return True
@@ -523,9 +551,11 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         _LOGGER.error("GATT write failed after %d attempts: %s", retries, str(last_error))
         return False
 
+    @client_operation
     async def _reconnect_and_authenticate(self, hass, ble_device: BLEDevice) -> bool:
         """Reconnect and re-authenticate with adaptive delays."""
         try:
+            await self._disconnect_safely()
             connect_delay = self._get_operation_delay(hass, ble_device.address, "connect")
             if connect_delay > 0:
                 await asyncio.sleep(connect_delay)
@@ -578,6 +608,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         _LOGGER.error("GATT read failed after %d attempts: %s", retries, str(last_error))
         return None
 
+    @client_operation
     async def reboot_device(self, hass, ble_device: BLEDevice) -> bool:
         """Reboot the device by sending reset command."""
         try:
@@ -623,6 +654,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             self._client = None
             self._ble_device = None
 
+    @client_operation
     async def get_available_zones(self, hass, ble_device: BLEDevice) -> list[int]:
         """Get available zones by performing a robust GATT probe.
 
@@ -798,6 +830,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         )
         return [0]
 
+    @client_operation
     async def _fetch_zone_configurations(self, client_or_device, zones: list[int]) -> None:
         """Fetch configuration data (MAV, FA, SPL) for detected zones.
 
@@ -927,45 +960,14 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
             list(self._device_state.get("zone_configs", {}).keys()),
         )
 
+    @client_operation
     async def _refetch_zone_configurations(self, hass, ble_device: BLEDevice, zones: list[int]) -> None:
-        """Re-fetch zone configurations during setup to ensure runtime parser has config data.
-
-        This solves the issue where config flow fetches zone configs in a temporary parser,
-        but the runtime parser instance needs the same configuration data.
-        """
-        _LOGGER.info("Re-fetching zone configurations for runtime parser: zones %s", zones)
-
-        client = None
+        """Read runtime capabilities through the parser's persistent client."""
         try:
-            # Connect and authenticate
-            client = await establish_connection(
-                BleakClientWithServiceCache,
-                ble_device,
-                ble_device.address,
-                timeout=15.0,
-            )
-            if not client or not client.is_connected:
-                _LOGGER.warning("Could not connect to re-fetch zone configs")
-                return
-
-            if self._password:
-                password_bytes = self._password.encode("utf-8")
-                await client.write_gatt_char(UUIDS["passwordCmd"], password_bytes, response=True)
-                await asyncio.sleep(0.5)
-                _LOGGER.debug("Re-fetch authentication completed")
-
-            # Fetch config for each detected zone
-            await self._fetch_zone_configurations(client, zones)
-            _LOGGER.info("Runtime zone configuration re-fetch completed successfully")
-
-        except (BleakError, asyncio.TimeoutError, OSError, json.JSONDecodeError) as e:
-            _LOGGER.warning("Error re-fetching zone configurations: %s", str(e))
-        finally:
-            try:
-                if client and client.is_connected:
-                    await client.disconnect()
-            except (BleakError, OSError):
-                pass
+            if await self._ensure_connected(hass, ble_device):
+                await self._fetch_zone_configurations(self._client, zones)
+        except (BleakError, asyncio.TimeoutError, OSError, json.JSONDecodeError) as err:
+            _LOGGER.warning("Error re-fetching zone configurations: %s", err)
 
     async def _process_command_queue(self, hass, ble_device: BLEDevice) -> None:
         """Process commands from the queue serially to prevent device conflicts.
@@ -979,6 +981,10 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 try:
                     # Wait for next command with timeout
                     command_item = await asyncio.wait_for(self._command_queue.get(), timeout=60.0)
+
+                    if command_item["result_future"].done():
+                        self._command_queue.task_done()
+                        continue
 
                     # Get the best available BLE device
                     current_ble_device = self.get_ble_device(hass)
@@ -994,7 +1000,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                         continue
 
                     # Execute command with connection management
-                    result = await self._execute_command_safely(hass, current_ble_device, command_item["command"])
+                    result = await self._execute_command_safely(hass, current_ble_device, command_item["command"], request=command_item)
 
                     # Return result to caller
                     if not command_item["result_future"].done():
@@ -1008,8 +1014,9 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
 
                 except asyncio.TimeoutError:
                     # No commands for 60 seconds, check if we should keep connection alive
-                    if time.time() - self._last_activity_time > self._connection_idle_timeout:
-                        await self._disconnect_safely()
+                    async with self._client_operation():
+                        if time.time() - self._last_activity_time > self._connection_idle_timeout:
+                            await self._disconnect_safely()
                     continue
                 except (BleakError, OSError, json.JSONDecodeError) as e:
                     _LOGGER.error("Error in command queue worker: %s", str(e))
@@ -1036,22 +1043,26 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         finally:
             await self._disconnect_safely()
 
-    async def _execute_command_safely(self, hass, ble_device: BLEDevice, command: dict) -> bool:
+    async def _execute_command_safely(self, hass, ble_device: BLEDevice, command: dict, request=None) -> bool:
         """Execute a single command with proper connection and error handling.
 
         Automatically reads status response after commands to provide immediate
         UI feedback while maintaining thread-safe execution.
         """
-        async with self._client_lock:
+        async with self._client_operation():
             try:
+                if request is not None and request["result_future"].done():
+                    return False
                 # Ensure we have a valid connection
                 if not await self._ensure_connected(hass, ble_device):
                     return False
 
+                if request is not None and request["result_future"].done():
+                    return False
                 # Send command
                 command_bytes = json.dumps(command).encode()
                 _LOGGER.debug("Sending command: %s", command)
-                if not await self._write_gatt_with_retry(hass, UUIDS["jsonCmd"], command_bytes, ble_device):
+                if not await self._write_gatt_with_retry(hass, UUIDS["jsonCmd"], command_bytes, ble_device, request=request):
                     _LOGGER.warning("Failed to write command to device: %s", command)
                     return False
 
@@ -1128,6 +1139,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 await self._disconnect_safely()
                 return False
 
+    @client_operation
     async def _ensure_connected(self, hass, ble_device: BLEDevice) -> bool:
         """Ensure we have a valid, authenticated connection."""
         try:
@@ -1205,16 +1217,22 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
         )
         return None
 
+    @client_operation
     async def _disconnect_safely(self) -> None:
-        """Safely disconnect and clean up connection state."""
+        """Bound explicit cleanup and retain any unconfirmed client reference."""
+        client = self._client
+        if client is None:
+            return
         try:
-            if self._client and self._client.is_connected:
-                await self._client.disconnect()
-        except (BleakError, OSError) as e:
-            _LOGGER.debug("Error during safe disconnect: %s", str(e))
-        finally:
-            self._client = None
-            self._connected = False
+            async with asyncio.timeout(5):
+                await client.disconnect()
+            if client.is_connected:
+                raise BleakError("MicroAir client still connected after disconnect")
+        except Exception:
+            if client.is_connected:
+                raise
+        self._client = None
+        self._connected = False
 
     async def _start_connection_health_monitor(self, hass, ble_device: BLEDevice) -> None:
         """Start background health monitoring for the persistent connection."""
@@ -1226,29 +1244,30 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                 try:
                     await asyncio.sleep(self._health_check_interval)
 
-                    # Check if connection has been idle too long
-                    time_since_activity = time.time() - self._last_activity_time
-                    if time_since_activity > self._connection_idle_timeout:
-                        _LOGGER.debug(
-                            "Connection idle for %.1fs, disconnecting to save resources",
-                            time_since_activity,
-                        )
-                        await self._disconnect_safely()
-                        continue
-
-                    # If we have an active connection, verify it's still working
-                    if self._client and self._client.is_connected:
-                        try:
-                            # Simple health check - verify services are still available
-                            if not self._client.services:
-                                _LOGGER.debug("Connection health check failed - no services, reconnecting")
-                                await self._disconnect_safely()
-                        except (BleakError, OSError) as e:
+                    async with self._client_operation():
+                        # Check if connection has been idle too long
+                        time_since_activity = time.time() - self._last_activity_time
+                        if time_since_activity > self._connection_idle_timeout:
                             _LOGGER.debug(
-                                "Connection health check failed: %s, reconnecting",
-                                str(e),
+                                "Connection idle for %.1fs, disconnecting to save resources",
+                                time_since_activity,
                             )
                             await self._disconnect_safely()
+                            continue
+
+                        # If we have an active connection, verify it's still working
+                        if self._client and self._client.is_connected:
+                            try:
+                                # Simple health check - verify services are still available
+                                if not self._client.services:
+                                    _LOGGER.debug("Connection health check failed - no services, reconnecting")
+                                    await self._disconnect_safely()
+                            except (BleakError, OSError) as e:
+                                _LOGGER.debug(
+                                    "Connection health check failed: %s, reconnecting",
+                                    str(e),
+                                )
+                                await self._disconnect_safely()
 
                 except asyncio.CancelledError:
                     _LOGGER.debug("Connection health monitor cancelled")
@@ -1368,7 +1387,7 @@ class MicroAirEasyTouchBluetoothDeviceData(BluetoothData):
                         self._last_poll_success = False
                     else:
                         # Use the persistent connection for polling if available
-                        async with self._client_lock:
+                        async with self._client_operation():
                             try:
                                 if await self._ensure_connected(hass, current_ble_device):
                                     # Send status request
