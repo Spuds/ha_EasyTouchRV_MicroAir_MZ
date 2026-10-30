@@ -258,6 +258,32 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(tracker.peak, 1)
             self.assertFalse(tracker.active)
 
+    async def test_optional_peer_poll_budget_works_in_both_load_orders(self):
+        from unittest.mock import patch
+
+        for first_module in [peer_broker_module, micro_broker_module]:
+            broker = first_module.BleSessionBroker()
+            peer = Peer(broker)
+            peer._ble_poll_timeout = 0.1
+            with patch.object(first_module, "POLL_TIMEOUT", 0.01):
+                async with broker.session(peer, poll=True):
+                    await asyncio.sleep(0.03)
+            self.assertFalse(tracker.active)
+            original_connect = peer._ensure_connected
+
+            async def slow_connect(original_connect=original_connect):
+                await asyncio.sleep(0.03)
+                await original_connect()
+
+            peer._ensure_connected = slow_connect
+            with (
+                patch.object(first_module, "POLL_TIMEOUT", 0.01),
+                self.assertRaises(TimeoutError),
+            ):
+                async with broker.session(peer, poll=True):
+                    self.fail("Connection must retain the default deadline")
+            self.assertFalse(tracker.active)
+
     async def test_microair_command_precedes_pending_poll_and_zone_is_preserved(self):
         broker = peer_broker_module.BleSessionBroker()
         self.hass.data[micro_broker_module.BROKER_KEY] = broker

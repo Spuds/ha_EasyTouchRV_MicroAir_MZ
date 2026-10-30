@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 BROKER_KEY = "shared_ble_session_broker_v1"
 POLL_TIMEOUT = 15
 COMMAND_TIMEOUT = 45
+MAX_POLL_TIMEOUT = 90
 
 
 class BleSessionBroker:
@@ -93,8 +94,22 @@ class BleSessionBroker:
             if self._blocked is not None:
                 await self._cleanup(self._blocked)
                 self._blocked = None
-            async with asyncio.timeout(POLL_TIMEOUT if poll else COMMAND_TIMEOUT):
+            started = asyncio.get_running_loop().time()
+            async with asyncio.timeout(
+                POLL_TIMEOUT if poll else COMMAND_TIMEOUT
+            ) as deadline:
                 await participant._ensure_connected()
+                if poll:
+                    # Connection is always bounded by the default poll budget.
+                    # A detected multi-record protocol may need longer to read.
+                    budget = min(
+                        MAX_POLL_TIMEOUT,
+                        max(
+                            0.001,
+                            getattr(participant, "_ble_poll_timeout", POLL_TIMEOUT),
+                        ),
+                    )
+                    deadline.reschedule(started + budget)
                 yield
                 await participant._finish_ble_session()
         finally:
